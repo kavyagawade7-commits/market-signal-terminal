@@ -1,900 +1,938 @@
+/* ═══════════════════════════════════════════════════════════════
+   NEXUS · WAR ROOM AMBER · app.js
+   Every panel is a live instrument. The storm breathes.
+   ═══════════════════════════════════════════════════════════════ */
 'use strict';
-// ═══════════════════════════════════════════
-//  MARKET PULSE TERMINAL v2 — app.js
-// ═══════════════════════════════════════════
 
-// ── BASE DATA ─────────────────────────────
-const BASE = {
-  AAPL:{price:192.50,name:'Apple'},TSLA:{price:248.70,name:'Tesla'},
-  NVDA:{price:875.40,name:'Nvidia'},AMZN:{price:185.20,name:'Amazon'},
-  META:{price:510.30,name:'Meta'},MSFT:{price:415.80,name:'Microsoft'}
-};
-
-const SECTORS = [
-  {name:'Technology',base:100},  {name:'Healthcare',base:100},
-  {name:'Financials',base:100},  {name:'Energy',base:100},
-  {name:'Consumer',base:100},    {name:'Industrials',base:100},
-];
-
-const ECON_EVENTS = [
-  {time:'08:30',event:'Non-Farm Payrolls',impact:'high',forecast:'185K',actual:null},
-  {time:'10:00',event:'ISM Manufacturing',impact:'med',forecast:'48.5',actual:null},
-  {time:'14:00',event:'FOMC Minutes',impact:'high',forecast:'—',actual:null},
-  {time:'14:30',event:'Crude Oil Inventories',impact:'med',forecast:'-2.1M',actual:null},
-  {time:'16:00',event:'Consumer Confidence',impact:'med',forecast:'102.0',actual:null},
-  {time:'08:15',event:'ADP Employment',impact:'med',forecast:'150K',actual:'162K'},
-  {time:'08:30',event:'Initial Jobless Claims',impact:'med',forecast:'220K',actual:'215K'},
-  {time:'09:45',event:'PMI Composite',impact:'low',forecast:'51.2',actual:'51.8'},
-];
-
-// ── STATE ──────────────────────────────────
+// ── State ────────────────────────────────────────────────────
 const S = {
-  prices:{},prevPrices:{},opens:{},volumes:{},histories:{},changes:{},
-  watchlist:Object.keys(BASE),
-  trades:[],
-  chartSym:'AAPL',chartInterval:3,chartType:'area',
-  obSym:'AAPL',analyticsSym:'AAPL',depthSym:'AAPL',
-  tradeFilter:'ALL',newsFilter:'ALL',
-  sortBy:'sym',sortDir:1,
-  flashEnabled:true,largeOnly:false,
-  portfolio:{},
-  priceAlerts:[],
-  sectorPerfomance:{},
-  sessionPnl:0,
-  soundEnabled:false,
-  ticks:0,frameCount:0,
-  cmdHistory:[],cmdHistIdx:-1,
+  focus:        'NIFTY 50',
+  alertLevel:   'mid',       // low | mid | high
+  chartData:    [],
+  vixHistory:   [],
+  vixVal:       14.23,
+  riskVal:      42,
+  pnlTrades:    [],
+  cliHistory:   [],
+  cliIdx:       -1,
+  cliVisible:   false,
+  tf:           '1D',
 };
 
-for(const sym of S.watchlist){
-  const b=BASE[sym];
-  S.prices[sym]=b.price; S.prevPrices[sym]=b.price; S.opens[sym]=b.price;
-  S.volumes[sym]=Math.floor(Math.random()*8e6)+1e6;
-  S.histories[sym]=[b.price]; S.changes[sym]=0;
-}
-for(const sec of SECTORS) S.sectorPerfomance[sec.name]=0;
+// ── Helpers ──────────────────────────────────────────────────
+const $  = id => document.getElementById(id);
+const q  = s  => document.querySelector(s);
+const qa = s  => document.querySelectorAll(s);
 
-// ── UTILS ──────────────────────────────────
-const fmt=(n,d=2)=>Number(n).toFixed(d);
-const fmtK=n=>n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n;
-const fmtDollar=n=>'$'+(n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':fmt(n));
-const clamp=(v,mn,mx)=>Math.min(mx,Math.max(mn,v));
-function randNorm(mu=0,sig=1){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return mu+sig*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
-const ts=()=>new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
-const $ =id=>document.getElementById(id);
-const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt)e.textContent=txt;return e;};
-
-// ── CLOCK ──────────────────────────────────
-setInterval(()=>{const c=$('clock');if(c)c.textContent=ts();},1000);
-$('clock').textContent=ts();
-
-// ── THEME TOGGLE ───────────────────────────
-$('themeBtn').addEventListener('click',()=>document.body.classList.toggle('light'));
-$('soundBtn').addEventListener('click',()=>{
-  S.soundEnabled=!S.soundEnabled;
-  $('soundBtn').style.opacity=S.soundEnabled?'1':'0.4';
-});
-
-// ── PRICE ENGINE ───────────────────────────
-function tickPrices(){
-  for(const sym of S.watchlist){
-    S.prevPrices[sym]=S.prices[sym];
-    // Varied volatility per stock
-    const vol={TSLA:0.0025,NVDA:0.002,AAPL:0.001,MSFT:0.001,AMZN:0.0015,META:0.002}[sym]||0.0015;
-    let p=S.prices[sym]+S.prices[sym]*randNorm(0,vol);
-    p=Math.max(p,S.opens[sym]*0.6);
-    S.prices[sym]=Math.round(p*100)/100;
-    S.changes[sym]=((S.prices[sym]-S.opens[sym])/S.opens[sym])*100;
-    S.volumes[sym]+=Math.floor(Math.random()*30000);
-    S.histories[sym].push(S.prices[sym]);
-    if(S.histories[sym].length>300)S.histories[sym].shift();
-  }
-  // Sectors drift
-  for(const sec of SECTORS){
-    S.sectorPerfomance[sec.name]+=randNorm(0,0.15);
-    S.sectorPerfomance[sec.name]=clamp(S.sectorPerfomance[sec.name],-8,8);
-  }
-  S.ticks++;
-  checkPriceAlerts();
+function tween(from, to, dur, cb) {
+  const start = performance.now();
+  const tick = now => {
+    const t = Math.min((now - start) / dur, 1);
+    const e = 1 - Math.pow(1 - t, 3); // ease-out-cubic
+    cb(from + (to - from) * e);
+    if (t < 1) requestAnimationFrame(tick);
+    else cb(to);
+  };
+  requestAnimationFrame(tick);
 }
 
-// ── TICKER STRIP ───────────────────────────
-function updateTicker(){
-  const strip=$('tickerStrip');
-  if(!strip)return;
-  // Duplicate for seamless scroll
-  const items=S.watchlist.map(sym=>{
-    const c=S.changes[sym],dir=c>=0?'up':'dn',arr=c>=0?'▲':'▼';
-    return `<span class="ticker-item"><span class="ticker-sym">${sym}</span><span class="ticker-price">${fmt(S.prices[sym])}</span><span class="ticker-chg ${dir}">${arr}${fmt(Math.abs(c),2)}%</span></span>`;
-  }).join('');
-  strip.innerHTML=items+items; // duplicate for CSS scroll loop
+function fmt(n, decimals = 2) {
+  return n.toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-// ── CHART ──────────────────────────────────
-function drawChart(){
-  const canvas=$('priceCanvas');if(!canvas)return;
-  const ctx=canvas.getContext('2d');
-  const W=canvas.offsetWidth||600,H=220;
-  canvas.width=W;canvas.height=H;
-  const sym=S.chartSym,hist=S.histories[sym]||[];
-  if(hist.length<2)return;
-
-  const pad={t:12,r:56,b:20,l:58};
-  const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
-  const mn=Math.min(...hist)*0.9998,mx=Math.max(...hist)*1.0002;
-  const range=mx-mn||1;
-  const xOf=i=>pad.l+(i/(hist.length-1))*cw;
-  const yOf=v=>pad.t+(1-(v-mn)/range)*ch;
-  const up=S.changes[sym]>=0;
-  const lineColor=up?'#00d68f':'#ff4d6a';
-
-  ctx.clearRect(0,0,W,H);
-
-  // Grid
-  ctx.strokeStyle='rgba(26,42,58,0.9)';ctx.lineWidth=0.5;
-  for(let i=0;i<=4;i++){
-    const y=pad.t+(i/4)*ch;
-    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
-    const v=mx-(i/4)*range;
-    ctx.fillStyle='#3d5670';ctx.font='9px IBM Plex Mono';ctx.textAlign='right';
-    ctx.fillText(fmt(v),pad.l-4,y+3);
-  }
-
-  if(S.chartType==='candle'&&hist.length>5){
-    // Simple candle (simulated open/close from adjacent bars)
-    const barW=Math.max(1,cw/hist.length*0.7);
-    for(let i=1;i<hist.length;i++){
-      const o=hist[i-1],c=hist[i];
-      const hi=Math.max(o,c)*1.0003,lo=Math.min(o,c)*0.9997;
-      const col=c>=o?'#00d68f':'#ff4d6a';
-      ctx.strokeStyle=col;ctx.lineWidth=0.8;
-      ctx.beginPath();ctx.moveTo(xOf(i),yOf(hi));ctx.lineTo(xOf(i),yOf(lo));ctx.stroke();
-      ctx.fillStyle=col;
-      const bx=xOf(i)-barW/2,by=yOf(Math.max(o,c)),bh=Math.max(1,Math.abs(yOf(o)-yOf(c)));
-      ctx.fillRect(bx,by,barW,bh);
-    }
-  } else {
-    // Area / line
-    if(S.chartType==='area'){
-      const grd=ctx.createLinearGradient(0,pad.t,0,H-pad.b);
-      grd.addColorStop(0,up?'rgba(0,214,143,0.3)':'rgba(255,77,106,0.3)');
-      grd.addColorStop(1,up?'rgba(0,214,143,0)':'rgba(255,77,106,0)');
-      ctx.beginPath();ctx.moveTo(xOf(0),yOf(hist[0]));
-      for(let i=1;i<hist.length;i++)ctx.lineTo(xOf(i),yOf(hist[i]));
-      ctx.lineTo(xOf(hist.length-1),H-pad.b);ctx.lineTo(xOf(0),H-pad.b);ctx.closePath();
-      ctx.fillStyle=grd;ctx.fill();
-    }
-    ctx.beginPath();ctx.moveTo(xOf(0),yOf(hist[0]));
-    for(let i=1;i<hist.length;i++)ctx.lineTo(xOf(i),yOf(hist[i]));
-    ctx.strokeStyle=lineColor;ctx.lineWidth=1.5;ctx.lineJoin='round';ctx.stroke();
-  }
-
-  // VWAP line
-  const vwap=hist.reduce((a,b)=>a+b,0)/hist.length;
-  ctx.beginPath();ctx.moveTo(pad.l,yOf(vwap));ctx.lineTo(W-pad.r,yOf(vwap));
-  ctx.strokeStyle='rgba(255,201,71,0.4)';ctx.lineWidth=0.8;ctx.setLineDash([4,4]);ctx.stroke();
-  ctx.setLineDash([]);
-
-  // Last price dashed + label
-  const lastY=yOf(hist[hist.length-1]);
-  ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=0.8;
-  ctx.beginPath();ctx.moveTo(pad.l,lastY);ctx.lineTo(W-pad.r,lastY);ctx.stroke();ctx.setLineDash([]);
-  ctx.fillStyle=lineColor;ctx.font='bold 10px IBM Plex Mono';ctx.textAlign='left';
-  ctx.fillText(fmt(hist[hist.length-1]),W-pad.r+3,lastY+3);
-
-  // Meta
-  const p=S.prices[sym],c=S.changes[sym];
-  const priceEl=$('chartPrice');if(priceEl)priceEl.textContent=fmt(p);
-  const chgEl=$('chartChg');if(chgEl){chgEl.textContent=(c>=0?'+':'')+fmt(c,2)+'%';chgEl.className='price-chg '+(c>=0?'up':'dn');}
-  const statsEl=$('chartStats');
-  if(statsEl)statsEl.textContent=`H:${fmt(Math.max(...hist))}  L:${fmt(Math.min(...hist))}  Vol:${fmtK(S.volumes[sym])}  VWAP:${fmt(vwap)}`;
-
-  // Axis timestamps
-  const axis=$('chartAxis');
-  if(axis){const steps=5;axis.innerHTML=Array.from({length:steps},(_,i)=>`<span>${ts()}</span>`).join('');}
+function now() {
+  return new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
-// ── WATCHLIST ──────────────────────────────
-let sortBy='sym',sortDir=1;
-document.querySelectorAll('.sort-btn').forEach(b=>{
-  b.addEventListener('click',()=>{
-    const col=b.dataset.sort;
-    if(sortBy===col)sortDir*=-1;else{sortBy=col;sortDir=1;}
-    document.querySelectorAll('.sort-btn').forEach(x=>x.classList.remove('active'));
-    b.classList.add('active');
-    renderWatchlist();
-  });
-});
-
-function renderWatchlist(){
-  const tbody=$('watchlistBody');if(!tbody)return;
-  let syms=[...S.watchlist];
-  syms.sort((a,b)=>{
-    let va,vb;
-    if(sortBy==='sym'){va=a;vb=b;}
-    else if(sortBy==='price'){va=S.prices[a];vb=S.prices[b];}
-    else if(sortBy==='chg'){va=S.changes[a];vb=S.changes[b];}
-    else if(sortBy==='vol'){va=S.volumes[a];vb=S.volumes[b];}
-    return (va>vb?1:-1)*sortDir;
-  });
-  tbody.innerHTML=syms.map(sym=>{
-    const p=S.prices[sym],c=S.changes[sym],dir=c>=0?'up':'dn',arr=c>=0?'▲':'▼';
-    const rsi=calcRSI(S.histories[sym]);
-    let sig,sc;
-    if(rsi<35){sig='BUY';sc='sig-buy';}else if(rsi>65){sig='SELL';sc='sig-sell';}else{sig='HOLD';sc='sig-hold';}
-    const flash=S.flashEnabled&&S.prices[sym]!==S.prevPrices[sym]?(S.prices[sym]>S.prevPrices[sym]?' flash-g':' flash-r'):'';
-    return `<tr class="${flash}"><td style="color:var(--accent2);font-weight:600;cursor:pointer" onclick="setChart('${sym}')">${sym}</td><td style="color:var(--text)">${fmt(p)}</td><td class="${dir}">${arr}${fmt(Math.abs(c),2)}%</td><td>${fmtK(S.volumes[sym])}</td><td><span class="sig ${sc}">${sig}</span></td></tr>`;
-  }).join('');
-}
-
-window.setChart=sym=>{S.chartSym=sym;$('chartSymbol').value=sym;drawChart();};
-
-// ── HEATMAP ────────────────────────────────
-function renderHeatmap(){
-  const grid=$('heatmapGrid');if(!grid)return;
-  grid.innerHTML=SECTORS.map(sec=>{
-    const v=S.sectorPerfomance[sec.name];
-    const abs=Math.abs(v)/8;
-    let bg,tc;
-    if(v>0){bg=`rgba(0,214,143,${0.08+abs*0.35})`;tc='var(--green)';}
-    else if(v<0){bg=`rgba(255,77,106,${0.08+abs*0.35})`;tc='var(--red)';}
-    else{bg='var(--bg3)';tc='var(--text2)';}
-    return `<div class="hm-cell" style="background:${bg}"><span class="hm-sym">${sec.name}</span><span class="hm-chg" style="color:${tc}">${v>=0?'+':''}${fmt(v,2)}%</span></div>`;
-  }).join('');
-}
-
-// ── TRADE FEED ─────────────────────────────
-const MAX_TRADES=60;
-function genTrade(sym){
-  const p=S.prices[sym],sp=p*0.0003,buy=Math.random()>0.48;
-  const price=Math.round((p+(buy?sp:-sp))*100)/100;
-  const vol=Math.floor(Math.random()*(Math.random()<0.05?50000:3000))+10;
-  return{time:ts(),sym,price,vol,side:buy?'BUY':'SELL',size:price*vol};
-}
-function addTrades(){
-  const n=Math.floor(Math.random()*4)+1;
-  for(let i=0;i<n;i++){
-    const sym=S.watchlist[Math.floor(Math.random()*S.watchlist.length)];
-    S.trades.unshift(genTrade(sym));
-  }
-  if(S.trades.length>MAX_TRADES)S.trades.length=MAX_TRADES;
-}
-function renderTrades(){
-  const tbody=$('tradeBody');if(!tbody)return;
-  let list=S.tradeFilter==='ALL'?S.trades:S.trades.filter(t=>t.sym===S.tradeFilter);
-  if(S.largeOnly)list=list.filter(t=>t.vol>5000);
-  let buys=0,sells=0;
-  S.trades.slice(0,40).forEach(t=>t.side==='BUY'?buys++:sells++);
-  const ratio=sells===0?'∞':fmt(buys/sells,2);
-  const summ=$('tradeSummary');
-  if(summ)summ.innerHTML=`Buy: <span style="color:var(--green)">${buys}</span> &nbsp;|&nbsp; Sell: <span style="color:var(--red)">${sells}</span> &nbsp;|&nbsp; Ratio: <span style="color:var(--accent)">${ratio}</span>`;
-  tbody.innerHTML=list.slice(0,25).map((t,i)=>{
-    const flash=i===0&&S.flashEnabled?(t.side==='BUY'?' flash-g':' flash-r'):'';
-    const large=t.vol>5000?`style="font-weight:600"`:'';
-    return `<tr class="${flash}"><td>${t.time}</td><td style="color:var(--accent2)">${t.sym}</td><td class="${t.side==='BUY'?'up':'dn'}" ${large}>${fmt(t.price)}</td><td>${fmtK(t.vol)}</td><td class="side-${t.side==='BUY'?'b':'s'}">${t.side}</td><td style="color:var(--text3)">${fmtDollar(t.size)}</td></tr>`;
-  }).join('');
-}
-
-// ── ORDER BOOK ─────────────────────────────
-function renderOrderBook(){
-  const sym=S.obSym,mid=S.prices[sym],sp=mid*0.0007;
-  const asks=[],bids=[];
-  let ap=mid+sp/2,bp=mid-sp/2;
-  for(let i=0;i<10;i++){
-    asks.push({price:Math.round(ap*100)/100,size:Math.floor(Math.random()*12000)+100});
-    bids.push({price:Math.round(bp*100)/100,size:Math.floor(Math.random()*12000)+100});
-    ap+=mid*0.00025*(1+Math.random()*0.4);
-    bp-=mid*0.00025*(1+Math.random()*0.4);
-  }
-  const maxA=Math.max(...asks.map(a=>a.size)),maxB=Math.max(...bids.map(b=>b.size));
-  const totalBid=bids.reduce((a,b)=>a+b.size,0),totalAsk=asks.reduce((a,b)=>a+b.size,0);
-  const imbal=totalBid/(totalBid+totalAsk)*100;
-
-  $('askSide').innerHTML=[...asks].reverse().map(a=>`<div class="ob-row"><div class="depth-bar" style="width:${(a.size/maxA*100).toFixed(0)}%"></div><span class="ob-price">${fmt(a.price)}</span><span class="ob-size">${fmtK(a.size)}</span></div>`).join('');
-  $('bidSide').innerHTML=bids.map(b=>`<div class="ob-row"><div class="depth-bar" style="width:${(b.size/maxB*100).toFixed(0)}%"></div><span class="ob-price">${fmt(b.price)}</span><span class="ob-size">${fmtK(b.size)}</span></div>`).join('');
-  $('obSpread').textContent=fmt(Math.abs(asks[0].price-bids[0].price),4);
-  $('obMid').textContent=fmt(mid);
-  $('obImbal').textContent=fmt(imbal,1)+'%';
-  $('obImbal').style.color=imbal>55?'var(--green)':imbal<45?'var(--red)':'var(--text2)';
-}
-
-// ── MARKET DEPTH ───────────────────────────
-function renderDepth(){
-  const canvas=$('depthCanvas');if(!canvas)return;
-  const ctx=canvas.getContext('2d');
-  const W=canvas.offsetWidth||260,H=200;
-  canvas.width=W;canvas.height=H;
-  ctx.clearRect(0,0,W,H);
-
-  const sym=S.depthSym,mid=S.prices[sym];
-  const levels=15;
-  const asks=[],bids=[];
-  let ap=mid,bp=mid;
-  let cumulAsk=0,cumulBid=0;
-  for(let i=0;i<levels;i++){
-    ap+=mid*0.0003;bp-=mid*0.0003;
-    cumulAsk+=Math.floor(Math.random()*10000)+500;
-    cumulBid+=Math.floor(Math.random()*10000)+500;
-    asks.push({price:Math.round(ap*100)/100,cumul:cumulAsk});
-    bids.push({price:Math.round(bp*100)/100,cumul:cumulBid});
-  }
-  bids.reverse();
-
-  const allPrices=[...bids.map(b=>b.price),...asks.map(a=>a.price)];
-  const maxCumul=Math.max(cumulAsk,cumulBid);
-  const pMin=Math.min(...allPrices),pMax=Math.max(...allPrices);
-  const pad={t:10,r:10,b:24,l:10};
-  const cw=W-pad.l-pad.r,ch=H-pad.t-pad.b;
-  const xOf=p=>pad.l+((p-pMin)/(pMax-pMin))*cw;
-  const yOf=c=>pad.t+(1-(c/maxCumul))*ch;
-
-  // Both curves share the midpoint at bottom so they meet cleanly
-  const midX=xOf(mid);
-  const bottomY=H-pad.b;
-
-  // Bid area — from left edge, steps right toward mid, meets baseline at midX
-  ctx.beginPath();
-  ctx.moveTo(xOf(bids[0].price),bottomY);
-  bids.forEach(b=>ctx.lineTo(xOf(b.price),yOf(b.cumul)));
-  ctx.lineTo(midX,bottomY);
-  ctx.closePath();
-  ctx.fillStyle='rgba(0,214,143,0.18)';ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(xOf(bids[0].price),yOf(bids[0].cumul));
-  bids.forEach((b,i)=>{if(i>0)ctx.lineTo(xOf(b.price),yOf(b.cumul));});
-  ctx.lineTo(midX,bottomY);
-  ctx.strokeStyle='#00d68f';ctx.lineWidth=1.8;ctx.lineJoin='round';ctx.stroke();
-
-  // Ask area — from midX, steps right away from mid
-  ctx.beginPath();
-  ctx.moveTo(midX,bottomY);
-  asks.forEach(a=>ctx.lineTo(xOf(a.price),yOf(a.cumul)));
-  ctx.lineTo(xOf(asks[asks.length-1].price),bottomY);
-  ctx.closePath();
-  ctx.fillStyle='rgba(255,77,106,0.18)';ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(midX,bottomY);
-  asks.forEach(a=>ctx.lineTo(xOf(a.price),yOf(a.cumul)));
-  ctx.strokeStyle='#ff4d6a';ctx.lineWidth=1.8;ctx.lineJoin='round';ctx.stroke();
-
-  // Mid vertical line
-  ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=1;
-  ctx.beginPath();ctx.moveTo(midX,pad.t);ctx.lineTo(midX,bottomY);ctx.stroke();ctx.setLineDash([]);
-
-  // Grid lines
-  ctx.strokeStyle='rgba(26,42,58,0.7)';ctx.lineWidth=0.5;
-  for(let g=1;g<=3;g++){
-    const gy=pad.t+(g/4)*ch;
-    ctx.beginPath();ctx.moveTo(pad.l,gy);ctx.lineTo(W-pad.r,gy);ctx.stroke();
-  }
-
-  // Mid price label
-  ctx.fillStyle='rgba(200,220,240,0.7)';ctx.font='bold 9px IBM Plex Mono';ctx.textAlign='center';ctx.textBaseline='top';
-  ctx.fillText(fmt(mid),midX,bottomY+3);
-
-  // Bid / Ask labels
-  ctx.font='9px IBM Plex Mono';ctx.textBaseline='middle';
-  ctx.fillStyle='rgba(0,214,143,0.7)';ctx.textAlign='left';
-  ctx.fillText('BID',pad.l+4,pad.t+10);
-  ctx.fillStyle='rgba(255,77,106,0.7)';ctx.textAlign='right';
-  ctx.fillText('ASK',W-pad.r-4,pad.t+10);
-}
-
-// ── ANALYTICS ──────────────────────────────
-function calcRSI(hist,n=14){
-  if(hist.length<n+1)return 50;
-  let g=0,l=0;
-  for(let i=hist.length-n;i<hist.length;i++){const d=hist[i]-hist[i-1];d>0?g+=d:l+=Math.abs(d);}
-  if(l===0)return 100;return Math.round(100-(100/(1+(g/n)/(l/n))));
-}
-function ema(arr,n){let k=2/(n+1),e=arr[0];for(let i=1;i<arr.length;i++)e=arr[i]*k+e*(1-k);return e;}
-function stdDev(arr){const m=arr.reduce((a,b)=>a+b,0)/arr.length;return Math.sqrt(arr.reduce((a,b)=>a+(b-m)**2,0)/arr.length);}
-
-const PATTERNS=[
-  {name:'Bull Flag',     desc:'Strong uptrend, short consolidation', fn:h=>h.slice(-8)[0]<h.slice(-1)[0]&&h.slice(-4).every((_,i,a)=>i===0||Math.abs(a[i]-a[i-1])<a[i]*0.001)},
-  {name:'Breakout ↑',    desc:'Exceeds recent 15-bar high',           fn:h=>h[h.length-1]>Math.max(...h.slice(-16,-1))},
-  {name:'Breakdown ↓',   desc:'Breaks recent 15-bar low',             fn:h=>h[h.length-1]<Math.min(...h.slice(-16,-1))},
-  {name:'Doji',          desc:'Indecision — reversal watch',          fn:h=>Math.abs(h[h.length-1]-h[h.length-5])<h[h.length-1]*0.001},
-  {name:'V-Shape',       desc:'Sharp reversal detected',              fn:h=>h[h.length-5]<h[h.length-10]&&h[h.length-1]>h[h.length-3]},
-  {name:'Momentum ↑',   desc:'Sustained directional push',           fn:h=>h[h.length-1]-h[h.length-10]>h[h.length-10]*0.005},
+// ── Boot ─────────────────────────────────────────────────────
+const BOOT_LINES = [
+  'Establishing NSE / BSE data feeds...',
+  'Loading SEBI regulatory module...',
+  'Calibrating AI signal engine v3...',
+  'Warming anomaly detection core...',
+  'Mounting trade tape & order book...',
+  'NEXUS READY — ALL INSTRUMENTS LIVE',
 ];
 
-function renderAnalytics(){
-  const sym=S.analyticsSym,hist=S.histories[sym]||[S.prices[sym]],p=S.prices[sym];
-  const rsi=calcRSI(hist);
-  const vwap=hist.reduce((a,b)=>a+b,0)/hist.length;
-  const macd=hist.length>26?ema(hist,12)-ema(hist,26):0;
-  const slice20=hist.slice(-20);
-  const vol=stdDev(slice20)/p*100;
-  const ma20=slice20.reduce((a,b)=>a+b,0)/slice20.length;
-  const sd=stdDev(slice20);
-  const bollUp=ma20+2*sd,bollDn=ma20-2*sd,bw=(bollUp-bollDn)/ma20*100;
-  const stoch=hist.length>14?Math.round(((p-Math.min(...hist.slice(-14)))/(Math.max(...hist.slice(-14))-Math.min(...hist.slice(-14))||1))*100):50;
+function runBoot() {
+  const log  = $('bootLog');
+  const bar  = $('bootBar');
+  const pct  = $('bootPct');
+  let i = 0;
 
-  const rsiEl=$('rsiVal');
-  if(rsiEl){rsiEl.textContent=rsi;rsiEl.style.color=rsi<35?'var(--green)':rsi>65?'var(--red)':'var(--text)';}
-  const rb=$('rsiBar');if(rb){rb.style.width=rsi+'%';rb.style.background=rsi<35?'var(--green)':rsi>65?'var(--red)':'var(--accent2)';}
-  const rn=$('rsiNote');if(rn)rn.textContent=rsi<35?'OVERSOLD':rsi>65?'OVERBOUGHT':'NEUTRAL';
-
-  const mv=$('macdVal');if(mv){mv.textContent=fmt(macd,4);mv.style.color=macd>0?'var(--green)':'var(--red)';}
-  const ms=$('macdSub');if(ms)ms.textContent='Histogram: '+(macd>0?'+':'')+fmt(macd,4);
-
-  const vv=$('vwapVal');if(vv)vv.textContent=fmt(vwap);
-  const vs=$('vwapSub');if(vs){const d=(p-vwap)/vwap*100;vs.textContent=`vs Price: ${d>=0?'+':''}${fmt(d,2)}%`;vs.style.color=d>=0?'var(--green)':'var(--red)';}
-
-  const voel=$('volVal');if(voel)voel.textContent=fmt(vol,3)+'%';
-  const vosu=$('volSub');if(vosu){const r=vol>0.25?'HIGH':vol>0.12?'MEDIUM':'LOW';vosu.textContent=r;vosu.style.color=r==='HIGH'?'var(--red)':r==='MEDIUM'?'var(--amber)':'var(--green)';}
-
-  const bv=$('bollVal');if(bv)bv.textContent=`${fmt(bollDn)} – ${fmt(bollUp)}`;
-  const bs=$('bollSub');if(bs)bs.textContent=`Band width: ${fmt(bw,2)}%`;
-
-  const sv=$('stochVal');if(sv){sv.textContent=stoch;sv.style.color=stoch<20?'var(--green)':stoch>80?'var(--red)':'var(--text)';}
-  const ss=$('stochSub');if(ss)ss.textContent=stoch<20?'OVERSOLD':stoch>80?'OVERBOUGHT':'NEUTRAL';
-
-  let pat=null;for(const p2 of PATTERNS){try{if(p2.fn(hist)){pat=p2;break;}}catch(e){}}
-  const pv=$('patternVal');if(pv)pv.textContent=pat?pat.name:'No pattern';
-  const pd=$('patternDesc');if(pd)pd.textContent=pat?pat.desc:'Continue scanning...';
-
-  drawMomentum(hist);
-}
-
-function drawMomentum(hist){
-  const c=$('momentumCanvas');if(!c)return;
-  const ctx=c.getContext('2d');
-  const W=c.offsetWidth||300,H=44;c.width=W;c.height=H;
-  ctx.clearRect(0,0,W,H);
-  const n=30,recent=hist.slice(-n);
-  const max=Math.max(...recent),min=Math.min(...recent);
-  const bw=W/n;
-  recent.forEach((v,i)=>{
-    const norm=max===min?0.5:(v-min)/(max-min);
-    const bh=norm*H*0.9+2;
-    const r=Math.round(255*(1-norm)),g=Math.round(214*norm);
-    ctx.fillStyle=`rgb(${r},${g},80)`;
-    ctx.fillRect(i*bw+1,H-bh,bw-2,bh);
-  });
-}
-
-// ── CORRELATION MATRIX ─────────────────────
-function renderCorrelation(){
-  const canvas=$('corrCanvas');if(!canvas)return;
-  const ctx=canvas.getContext('2d');
-  const syms=S.watchlist.slice(0,6);
-  const n=syms.length;
-  const W=canvas.offsetWidth||280;
-  const pad={l:38,t:18,r:4,b:4};
-  const gridW=W-pad.l-pad.r;
-  const cellSize=Math.floor(gridW/n);
-  const H=pad.t+cellSize*n+pad.b;
-  canvas.width=W;canvas.height=H;
-  ctx.clearRect(0,0,W,H);
-
-  // Column labels
-  ctx.font='bold 9px IBM Plex Mono';ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillStyle='#7a9ab0';
-  syms.forEach((s,j)=>ctx.fillText(s,pad.l+j*cellSize+cellSize/2,pad.t/2));
-  // Row labels
-  ctx.textAlign='right';
-  syms.forEach((s,i)=>ctx.fillText(s,pad.l-4,pad.t+i*cellSize+cellSize/2));
-
-  for(let i=0;i<n;i++){
-    const histA=S.histories[syms[i]]||[];
-    for(let j=0;j<n;j++){
-      const histB=S.histories[syms[j]]||[];
-      let corr=0;
-      if(i===j){corr=1;}
-      else if(histA.length>10&&histB.length>10){
-        const len=Math.min(histA.length,histB.length,60);
-        const a=histA.slice(-len),b=histB.slice(-len);
-        const ma=a.reduce((x,y)=>x+y,0)/len,mb=b.reduce((x,y)=>x+y,0)/len;
-        let num=0,da=0,db=0;
-        for(let k=0;k<len;k++){num+=(a[k]-ma)*(b[k]-mb);da+=(a[k]-ma)**2;db+=(b[k]-mb)**2;}
-        corr=Math.max(-1,Math.min(1,num/Math.sqrt(da*db||1)));
-      }
-      const abs=Math.abs(corr);
-      const x=pad.l+j*cellSize,y=pad.t+i*cellSize,gap=2;
-      if(corr>0) ctx.fillStyle=`rgba(0,214,143,${0.12+abs*0.72})`;
-      else        ctx.fillStyle=`rgba(255,77,106,${0.12+abs*0.72})`;
-      ctx.fillRect(x+gap,y+gap,cellSize-gap*2,cellSize-gap*2);
-      // Text with drop shadow for legibility on all backgrounds
-      ctx.textAlign='center';ctx.textBaseline='middle';
-      ctx.font=`bold ${cellSize>32?10:9}px IBM Plex Mono`;
-      ctx.fillStyle='rgba(0,0,0,0.5)';
-      ctx.fillText(fmt(corr,1),x+cellSize/2+0.5,y+cellSize/2+0.5);
-      ctx.fillStyle='rgba(255,255,255,0.93)';
-      ctx.fillText(fmt(corr,1),x+cellSize/2,y+cellSize/2);
+  const next = () => {
+    if (i >= BOOT_LINES.length) {
+      setTimeout(() => {
+        const boot = $('boot');
+        boot.style.opacity = '0';
+        setTimeout(() => { boot.style.display = 'none'; $('app').classList.remove('hidden'); initApp(); }, 700);
+      }, 300);
+      return;
     }
-  }
+    const div = document.createElement('div');
+    div.textContent = '▸ ' + BOOT_LINES[i];
+    log.appendChild(div);
+    i++;
+    const p = (i / BOOT_LINES.length * 100);
+    bar.style.width = p + '%';
+    pct.textContent = Math.round(p) + '%';
+    setTimeout(next, 340 + Math.random() * 180);
+  };
+  setTimeout(next, 500);
 }
 
-// ── PORTFOLIO ──────────────────────────────
-function addPosition(sym,qty,avgPrice){
-  if(!S.portfolio[sym])S.portfolio[sym]={qty:0,avgPrice:0,invested:0};
-  const pos=S.portfolio[sym];
-  const total=pos.qty*pos.avgPrice+qty*avgPrice;
-  pos.qty+=qty;
-  pos.avgPrice=total/pos.qty;
-  pos.invested=pos.qty*pos.avgPrice;
+// ── Clock & metrics ──────────────────────────────────────────
+function startClock() {
+  const clockEl = $('clock');
+  const dotEl   = $('mktDot');
+  const txtEl   = $('mktText');
+  const latEl   = $('latency');
+
+  const tick = () => {
+    const now = new Date();
+    clockEl.textContent = now.toLocaleTimeString('en-IN', { hour12: false });
+    const h = now.getHours(), m = now.getMinutes();
+    const open = (h > 9 || (h === 9 && m >= 15)) && (h < 15 || (h === 15 && m < 30));
+    txtEl.textContent = open ? 'MARKET OPEN' : 'MARKET CLOSED';
+    dotEl.classList.toggle('open', open);
+  };
+  tick();
+  setInterval(tick, 1000);
+  setInterval(() => { latEl.textContent = 5 + Math.floor(Math.random() * 20); }, 1800);
 }
-function renderPortfolio(){
-  const tbody=$('portfolioBody');if(!tbody)return;
-  let totalVal=0,totalInvested=0;
-  const rows=Object.entries(S.portfolio).map(([sym,pos])=>{
-    const now=S.prices[sym]||pos.avgPrice;
-    const val=pos.qty*now,pnl=val-pos.invested,pct=(pnl/pos.invested)*100;
-    totalVal+=val;totalInvested+=pos.invested;
-    return `<tr><td style="color:var(--accent2)">${sym}</td><td>${pos.qty}</td><td>${fmt(pos.avgPrice)}</td><td>${fmt(now)}</td><td class="${pnl>=0?'up':'dn'}">${pnl>=0?'+':''}${fmt(pnl,2)}</td></tr>`;
+
+// ── Ticker tape ──────────────────────────────────────────────
+const TICKER_SOURCE = [
+  { sym: 'NIFTY',     p: 24853.15, c: +1.24 },
+  { sym: 'SENSEX',    p: 81724.80, c: +0.98 },
+  { sym: 'BANKNIFTY', p: 53120.45, c: -0.34 },
+  { sym: 'RELIANCE',  p: 2947.60,  c: +2.10 },
+  { sym: 'TCS',       p: 3812.30,  c: -0.82 },
+  { sym: 'INFY',      p: 1623.45,  c: +0.55 },
+  { sym: 'HDFCBANK',  p: 1782.90,  c: +1.44 },
+  { sym: 'ITC',       p: 468.75,   c: +0.30 },
+  { sym: 'MARUTI',    p: 11342.00, c: -1.12 },
+  { sym: 'USDINR',    p: 83.48,    c: +0.12 },
+  { sym: 'GOLD',      p: 72840,    c: +0.68 },
+  { sym: 'CRUDE',     p: 6284,     c: -1.22 },
+  { sym: 'VIX',       p: 14.23,    c: -3.40 },
+];
+
+let tickerState = TICKER_SOURCE.map(d => ({ ...d }));
+
+function buildTickerHTML() {
+  return tickerState.map(d => {
+    const dir = d.c >= 0 ? 'up' : 'dn';
+    const arrow = d.c >= 0 ? '▲' : '▼';
+    return `<span class="tick-item">
+      <span class="tick-sym">${d.sym}</span>
+      <span class="tick-price">${fmt(d.p)}</span>
+      <span class="tick-chg ${dir}">${arrow} ${Math.abs(d.c).toFixed(2)}%</span>
+    </span>`;
+  }).join('');
+}
+
+function initTicker() {
+  const inner = $('tbTickerInner');
+  const refresh = () => {
+    const h = buildTickerHTML();
+    inner.innerHTML = h + h; // double for seamless loop
+  };
+  refresh();
+  setInterval(() => {
+    tickerState.forEach(d => {
+      d.p = Math.max(1, d.p * (1 + (Math.random() - 0.49) * 0.002));
+      d.c += (Math.random() - 0.5) * 0.08;
+    });
+    refresh();
+  }, 4000);
+}
+
+// ── Macro strip ──────────────────────────────────────────────
+const MACRO_DATA = [
+  { id: 'usdinr', name: 'USD/INR', val: 83.48,   chg: +0.12 },
+  { id: 'gold',   name: 'GOLD',    val: 72840,    chg: +0.68 },
+  { id: 'crude',  name: 'CRUDE',   val: 6284,     chg: -1.22 },
+  { id: 'dxy',    name: 'DXY',     val: 104.32,   chg: +0.22 },
+  { id: 'us10y',  name: 'US 10Y',  val: 4.34,     chg: +0.04 },
+  { id: 'sp500',  name: 'S&P 500', val: 5127.79,  chg: +0.44 },
+];
+let macroState = MACRO_DATA.map(d => ({ ...d }));
+
+function renderMacro() {
+  const grid = $('macroGrid');
+  grid.innerHTML = '';
+  macroState.forEach(d => {
+    const isPos = d.chg >= 0;
+    const cell = document.createElement('div');
+    cell.className = 'macro-cell';
+    cell.innerHTML = `
+      <div class="macro-name">${d.name}</div>
+      <div class="macro-val">${fmt(d.val, d.val < 100 ? 2 : 0)}</div>
+      <div class="macro-chg ${isPos ? 'pos' : 'neg'}">${isPos ? '▲' : '▼'} ${Math.abs(d.chg).toFixed(2)}%</div>
+    `;
+    grid.appendChild(cell);
   });
-  tbody.innerHTML=rows.join('');
-  const pnl=totalVal-totalInvested,ret=totalInvested>0?pnl/totalInvested*100:0;
-  const ptv=$('ptotalVal');if(ptv)ptv.textContent=fmtDollar(totalVal);
-  const pp=$('ppnl');if(pp){pp.textContent=(pnl>=0?'+':'')+fmtDollar(Math.abs(pnl));pp.style.color=pnl>=0?'var(--green)':'var(--red)';}
-  const pr=$('preturn');if(pr){pr.textContent=(ret>=0?'+':'')+fmt(ret,2)+'%';pr.style.color=ret>=0?'var(--green)':'var(--red)';}
 }
 
-// ── MINI CHARTS ────────────────────────────
-function renderMiniCharts(){
-  const grid=$('miniChartsGrid');if(!grid)return;
-  grid.innerHTML=S.watchlist.map(sym=>{
-    const p=S.prices[sym],c=S.changes[sym],dir=c>=0?'up':'dn',arr=c>=0?'▲':'▼';
-    return `<div class="mini-chart-card" onclick="setChart('${sym}')">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <span class="mini-sym">${sym}</span>
-        <span class="mini-chg ${dir}">${arr}${fmt(Math.abs(c),2)}%</span>
+function initMacro() {
+  renderMacro();
+  setInterval(() => {
+    macroState.forEach(d => {
+      d.val = Math.max(0.01, d.val * (1 + (Math.random() - 0.49) * 0.0015));
+      d.chg += (Math.random() - 0.5) * 0.05;
+    });
+    renderMacro();
+  }, 3500);
+}
+
+// ── Indices with sparklines ───────────────────────────────────
+const IDX_DATA = [
+  { id: 'nifty50',   name: 'NIFTY 50',   val: 24853.15, chg: +1.24, hist: [] },
+  { id: 'sensex',    name: 'SENSEX',     val: 81724.80, chg: +0.98, hist: [] },
+  { id: 'banknifty', name: 'BANKNIFTY',  val: 53120.45, chg: -0.34, hist: [] },
+  { id: 'niftyit',   name: 'NIFTY IT',   val: 38940.20, chg: -0.82, hist: [] },
+  { id: 'auto',      name: 'NIFTY AUTO', val: 22415.60, chg: +1.72, hist: [] },
+  { id: 'midcap',    name: 'MIDCAP 150', val: 19342.80, chg: +0.44, hist: [] },
+];
+let idxState = IDX_DATA.map(d => ({ ...d, hist: Array.from({ length: 20 }, () => d.val * (1 + (Math.random() - 0.5) * 0.005)) }));
+
+function drawMiniSpark(canvas, data, isPos) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 40, H = canvas.offsetHeight || 20;
+  canvas.width = W; canvas.height = H;
+  const mn = Math.min(...data), mx = Math.max(...data), rng = mx - mn || 1;
+  const step = W / (data.length - 1);
+  ctx.clearRect(0, 0, W, H);
+  ctx.beginPath();
+  ctx.strokeStyle = isPos ? '#00e5a0' : '#ff3355';
+  ctx.lineWidth = 1.2;
+  ctx.lineJoin = 'round';
+  data.forEach((v, i) => {
+    const x = i * step, y = H - ((v - mn) / rng) * H * 0.8 - H * 0.1;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
+
+function renderIndices() {
+  const list = $('idxList');
+  list.innerHTML = '';
+  idxState.forEach(d => {
+    const isPos = d.chg >= 0;
+    const row = document.createElement('div');
+    row.className = 'idx-row' + (d.name === S.focus ? ' focused' : '');
+    row.dataset.name = d.name;
+    row.innerHTML = `
+      <canvas class="idx-spark-mini" width="40" height="20"></canvas>
+      <div class="idx-info">
+        <div class="idx-name">${d.name}</div>
+        <div class="idx-price">${fmt(d.val)}</div>
       </div>
-      <span class="mini-price">${fmt(p)}</span>
-      <canvas class="mini-canvas" id="mini-${sym}" width="200" height="36"></canvas>
-    </div>`;
-  }).join('');
-  // Draw each mini sparkline
-  requestAnimationFrame(()=>{
-    S.watchlist.forEach(sym=>{
-      const c=document.getElementById('mini-'+sym);if(!c)return;
-      const ctx=c.getContext('2d');
-      const hist=S.histories[sym]||[];
-      const W=c.offsetWidth||200,H=36;c.width=W;c.height=H;
-      if(hist.length<2)return;
-      const mn=Math.min(...hist),mx=Math.max(...hist),range=mx-mn||1;
-      const up=S.changes[sym]>=0;
-      ctx.beginPath();
-      hist.forEach((v,i)=>{const x=(i/(hist.length-1))*W,y=(1-(v-mn)/range)*(H-2)+1;i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);});
-      ctx.strokeStyle=up?'#00d68f':'#ff4d6a';ctx.lineWidth=1.2;ctx.lineJoin='round';ctx.stroke();
+      <div class="idx-chg ${isPos ? 'pos' : 'neg'}">${isPos ? '▲' : '▼'} ${Math.abs(d.chg).toFixed(2)}%</div>
+    `;
+    const spark = row.querySelector('canvas');
+    setTimeout(() => drawMiniSpark(spark, d.hist, isPos), 10);
+    row.addEventListener('click', () => {
+      S.focus = d.name;
+      $('focusDisplay').textContent = d.name;
+      $('chartTitle').textContent   = d.name;
+      $('obTicker').textContent     = d.name.replace(' ', '').toUpperCase().slice(0, 10);
+      renderIndices();
+    });
+    list.appendChild(row);
+  });
+}
+
+function updateIndices() {
+  idxState.forEach(d => {
+    const prev = d.val;
+    d.val = Math.max(100, d.val + (Math.random() - 0.49) * d.val * 0.0012);
+    d.chg += (Math.random() - 0.5) * 0.06;
+    d.hist.push(d.val);
+    if (d.hist.length > 30) d.hist.shift();
+
+    // Flash the row if it already exists
+    const row = q(`[data-name="${d.name}"]`);
+    if (row) {
+      row.classList.remove('flash-g', 'flash-r');
+      void row.offsetWidth;
+      row.classList.add(d.val > prev ? 'flash-g' : 'flash-r');
+    }
+  });
+  renderIndices();
+}
+
+function initIndices() { renderIndices(); setInterval(updateIndices, 2400); }
+
+// ── Main Chart ───────────────────────────────────────────────
+function genChartData(n = 90, base = 24610, vol = 90) {
+  let v = base, out = [];
+  for (let i = 0; i < n; i++) {
+    v = Math.max(base - 600, v + (Math.random() - 0.475) * vol);
+    out.push(v);
+  }
+  return out;
+}
+
+function initChart() {
+  const canvas = $('mainChart');
+  const ctx    = canvas.getContext('2d');
+  S.chartData  = genChartData();
+  let prevVal  = S.chartData[S.chartData.length - 1];
+
+  function draw() {
+    const W = canvas.offsetWidth, H = canvas.offsetHeight || 200;
+    if (!W) return;
+    canvas.width = W; canvas.height = H;
+    const data = S.chartData;
+    const mn = Math.min(...data), mx = Math.max(...data), rng = mx - mn || 1;
+    const pad = { t: 12, r: 12, b: 18, l: 52 };
+    const cW = W - pad.l - pad.r, cH = H - pad.t - pad.b;
+    const step = cW / Math.max(data.length - 1, 1);
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (cH / 5) * i;
+      ctx.beginPath(); ctx.setLineDash([2, 8]);
+      ctx.strokeStyle = 'rgba(255,160,30,0.06)'; ctx.lineWidth = 1;
+      ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#3d3528';
+      ctx.font = '9px IBM Plex Mono'; ctx.textAlign = 'right';
+      ctx.fillText((mx - (rng / 5) * i).toFixed(0), pad.l - 6, y + 3);
+    }
+
+    // Vertical guides
+    for (let i = 0; i <= 7; i++) {
+      const x = pad.l + (cW / 7) * i;
+      ctx.beginPath(); ctx.setLineDash([1, 12]);
+      ctx.strokeStyle = 'rgba(255,160,30,0.04)'; ctx.lineWidth = 1;
+      ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + cH); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Gradient area
+    const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + cH);
+    grad.addColorStop(0,   'rgba(255,170,0,0.14)');
+    grad.addColorStop(0.5, 'rgba(255,170,0,0.04)');
+    grad.addColorStop(1,   'rgba(255,170,0,0)');
+    ctx.beginPath();
+    data.forEach((v, i) => {
+      const x = pad.l + i * step, y = pad.t + cH - ((v - mn) / rng) * cH;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.lineTo(pad.l + (data.length - 1) * step, pad.t + cH);
+    ctx.lineTo(pad.l, pad.t + cH); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+
+    // Line
+    const lastVal = data[data.length - 1];
+    const firstVal = data[0];
+    const lineColor = lastVal >= firstVal ? '#00e5a0' : '#ff3355';
+    ctx.beginPath();
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = lineColor; ctx.shadowBlur = 5;
+    data.forEach((v, i) => {
+      const x = pad.l + i * step, y = pad.t + cH - ((v - mn) / rng) * cH;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke(); ctx.shadowBlur = 0;
+
+    // Live dot
+    const lv = data[data.length - 1];
+    const lx = pad.l + (data.length - 1) * step;
+    const ly = pad.t + cH - ((lv - mn) / rng) * cH;
+    ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+    ctx.fillStyle = lineColor; ctx.shadowColor = lineColor; ctx.shadowBlur = 12;
+    ctx.fill(); ctx.shadowBlur = 0;
+
+    // Dashed price level
+    ctx.beginPath(); ctx.setLineDash([3, 6]);
+    ctx.strokeStyle = 'rgba(255,170,0,0.2)'; ctx.lineWidth = 1;
+    ctx.moveTo(pad.l, ly); ctx.lineTo(lx, ly); ctx.stroke(); ctx.setLineDash([]);
+
+    // Price label on right
+    ctx.fillStyle = 'rgba(255,170,0,0.7)';
+    ctx.font = 'bold 9px IBM Plex Mono'; ctx.textAlign = 'left';
+    ctx.fillText(lv.toFixed(0), lx + 6, ly + 3);
+  }
+
+  draw();
+  window.addEventListener('resize', draw);
+
+  setInterval(() => {
+    const last = S.chartData[S.chartData.length - 1];
+    S.chartData.push(Math.max(24000, last + (Math.random() - 0.475) * 65));
+    if (S.chartData.length > 120) S.chartData.shift();
+
+    const val   = S.chartData[S.chartData.length - 1];
+    const first = S.chartData[0];
+    const pct   = ((val - first) / first * 100);
+    const isPos = pct >= 0;
+
+    tween(prevVal, val, 500, v => { $('niftyPrice').textContent = fmt(v); });
+    prevVal = val;
+
+    const chgEl = $('niftyChg');
+    chgEl.textContent = `${isPos ? '▲' : '▼'} ${isPos ? '+' : ''}${pct.toFixed(2)}%`;
+    chgEl.className = `big-chg ${isPos ? 'pos' : 'neg'}`;
+
+    $('ohlcC').textContent = fmt(val);
+    $('ohlcH').textContent = fmt(Math.max(...S.chartData));
+    $('ohlcL').textContent = fmt(Math.min(...S.chartData));
+
+    // whisper based on move
+    setWhisper(Math.abs(pct) > 2 ? 'high' : Math.abs(pct) > 0.8 ? 'mid' : Math.abs(pct) > 0.3 ? 'low' : 'none');
+    draw();
+  }, 2800);
+
+  // Timeframe buttons
+  qa('.tf-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      qa('.tf-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      S.tf = btn.dataset.tf;
+      const bases = { '1D': 24610, '5D': 23800, '1M': 22000, '3M': 20000 };
+      const vols  = { '1D': 90, '5D': 150, '1M': 250, '3M': 400 };
+      const lens  = { '1D': 90, '5D': 78, '1M': 66, '3M': 90 };
+      S.chartData = genChartData(lens[S.tf], bases[S.tf], vols[S.tf]);
+      prevVal = S.chartData[S.chartData.length - 1];
+      draw();
     });
   });
 }
 
-// ── NEWS ───────────────────────────────────
-const NEWS=[
-  {t:'{s} beats earnings by {n}%, institutional buying surge',sent:'bull'},
-  {t:'{s} upgraded to Strong Buy, target raised to ${p}',sent:'bull'},
-  {t:'{s} new product announcement — shares react positively',sent:'bull'},
-  {t:'{s} announces $2B buyback programme',sent:'bull'},
-  {t:'{s} regulatory probe widened — shares under pressure',sent:'bear'},
-  {t:'{s} misses quarterly revenue, guidance lowered',sent:'bear'},
-  {t:'{s} large block sell detected in dark pool',sent:'bear'},
-  {t:'{s} insider selling flagged by SEC filing',sent:'bear'},
-  {t:'{s} unusual options activity detected',sent:'neut'},
-  {t:'{s} CEO to present at Goldman Sachs conference',sent:'neut'},
-  {t:'{s} volume spike 3x average — no news catalyst',sent:'neut'},
-  {t:'Market-wide volatility spike detected — VIX +{n}%',sent:'bear'},
+// ── Whisper / Edge glow ──────────────────────────────────────
+function setWhisper(level) {
+  const el = $('edgeGlow');
+  el.className = 'edge-glow';
+  if (level !== 'none') el.classList.add('w-' + level);
+  $('alertLevel').textContent = level === 'none' ? S.alertLevel.toUpperCase() : level.toUpperCase();
+}
+
+// ── VIX dial ─────────────────────────────────────────────────
+function initVIX() {
+  S.vixHistory = Array.from({ length: 30 }, () => 12 + Math.random() * 4);
+  let prev = S.vixVal;
+
+  const arcEl   = $('vixArc');
+  const numEl   = $('vixSvgNum');
+  const badgeEl = $('vixBadge');
+  const sparkEl = $('vixSpark');
+
+  // Arc: total length ≈ 220 (π * r where r≈70, half circle)
+  function updateDial(v) {
+    const pct = (v - 8) / 30;
+    const offset = 220 - pct * 220;
+    arcEl.style.strokeDashoffset = Math.max(0, offset);
+
+    if (v < 15)      { arcEl.style.stroke = '#ffaa00'; badgeEl.textContent = 'CALM';       badgeEl.className = 'vix-badge'; }
+    else if (v < 22) { arcEl.style.stroke = '#ff8800'; badgeEl.textContent = 'ELEVATED';   badgeEl.className = 'vix-badge elevated'; }
+    else             { arcEl.style.stroke = '#ff3355'; badgeEl.textContent = 'HIGH ALERT'; badgeEl.className = 'vix-badge high'; }
+  }
+
+  function drawSpark() {
+    if (!sparkEl) return;
+    const ctx = sparkEl.getContext('2d');
+    const W = sparkEl.offsetWidth || 80, H = sparkEl.offsetHeight || 28;
+    sparkEl.width = W; sparkEl.height = H;
+    const data = S.vixHistory;
+    const mn = Math.min(...data), mx = Math.max(...data), rng = mx - mn || 1;
+    const step = W / (data.length - 1);
+    ctx.clearRect(0, 0, W, H);
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,170,0,0.5)'; ctx.lineWidth = 1.2; ctx.lineJoin = 'round';
+    data.forEach((v, i) => {
+      const x = i * step, y = H - ((v - mn) / rng) * H * 0.8 - H * 0.1;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  updateDial(S.vixVal);
+  drawSpark();
+
+  setInterval(() => {
+    prev = S.vixVal;
+    S.vixVal = Math.max(8, Math.min(38, S.vixVal + (Math.random() - 0.5) * 0.45));
+    S.vixHistory.push(S.vixVal);
+    if (S.vixHistory.length > 40) S.vixHistory.shift();
+    tween(prev, S.vixVal, 1000, v => { numEl.textContent = v.toFixed(1); });
+    updateDial(S.vixVal);
+    drawSpark();
+  }, 3200);
+}
+
+// ── Order Book ────────────────────────────────────────────────
+function renderOB() {
+  const base = idxState[0]?.val || 24853;
+  const asks = $('obAsks'), bids = $('obBids');
+  asks.innerHTML = ''; bids.innerHTML = '';
+
+  for (let i = 5; i >= 1; i--) {
+    const p = (base + i * 0.5 + Math.random() * 0.3).toFixed(2);
+    const q = 50 + Math.floor(Math.random() * 220);
+    const w = 15 + Math.random() * 72;
+    const row = document.createElement('div');
+    row.className = 'ob-row ask';
+    const bar = document.createElement('div');
+    bar.className = 'ob-bar'; bar.style.width = w + '%';
+    row.appendChild(bar);
+    row.innerHTML += `<span class="ob-price">${p}</span><span class="ob-qty">${q}</span><span class="ob-depth">${w.toFixed(0)}%</span>`;
+    asks.appendChild(row);
+  }
+  for (let i = 1; i <= 5; i++) {
+    const p = (base - i * 0.5 - Math.random() * 0.3).toFixed(2);
+    const q = 50 + Math.floor(Math.random() * 220);
+    const w = 15 + Math.random() * 72;
+    const row = document.createElement('div');
+    row.className = 'ob-row bid';
+    const bar = document.createElement('div');
+    bar.className = 'ob-bar'; bar.style.width = w + '%';
+    row.appendChild(bar);
+    row.innerHTML += `<span class="ob-price">${p}</span><span class="ob-qty">${q}</span><span class="ob-depth">${w.toFixed(0)}%</span>`;
+    bids.appendChild(row);
+  }
+  $('obSpread').textContent = `── SPREAD ${(0.03 + Math.random() * 0.06).toFixed(2)} ──`;
+}
+function initOB() { renderOB(); setInterval(renderOB, 900); }
+
+// ── Trade Tape ────────────────────────────────────────────────
+function initTape() {
+  const wrap = $('tapeWrap');
+
+  const addTick = () => {
+    const base   = idxState[0]?.val || 24853;
+    const isBuy  = Math.random() > 0.5;
+    const price  = (base + (Math.random() - 0.5) * 2).toFixed(2);
+    const qty    = (10 + Math.floor(Math.random() * 500)) * 10;
+    const ts     = now();
+
+    const row = document.createElement('div');
+    row.className = `tape-row ${isBuy ? 'tape-buy' : 'tape-sell'}`;
+    row.innerHTML = `
+      <span class="tape-price">${price}</span>
+      <span class="tape-qty">${qty.toLocaleString()}</span>
+      <span class="tape-time">${ts}</span>
+    `;
+    wrap.insertBefore(row, wrap.firstChild);
+    while (wrap.children.length > 22) wrap.removeChild(wrap.lastChild);
+  };
+
+  // Burst of initial ticks
+  for (let i = 0; i < 12; i++) setTimeout(addTick, i * 60);
+  const schedule = () => setTimeout(() => { addTick(); schedule(); }, 300 + Math.random() * 700);
+  schedule();
+}
+
+// ── Signals ───────────────────────────────────────────────────
+const SIGNAL_POOL = [
+  { text: 'RELIANCE breakout above ₹2,940 resistance — volume surge 3.2× avg', badge: 'buy', type: 'buy' },
+  { text: 'BANKNIFTY put-call ratio spikes to 1.62 — bearish sentiment building', badge: 'alert', type: 'warn' },
+  { text: 'HDFCBANK FII net buying ₹842 Cr intraday — institutional accumulation', badge: 'buy', type: 'buy' },
+  { text: 'NIFTYIT sector weakness — TCS drops below 200 DMA on rising volumes', badge: 'sell', type: 'sell' },
+  { text: 'INFY options IV crush expected post-earnings on Thursday', badge: 'alert', type: 'warn' },
+  { text: 'ONGC momentum: RSI(14) = 68 — approaching overbought zone', badge: 'alert', type: 'warn' },
+  { text: 'MARUTI support at ₹11,200 holding — intraday bounce confirmed', badge: 'buy', type: 'buy' },
+  { text: 'BAJFINANCE unusual call sweeps — bullish institutional flow 3× avg', badge: 'buy', type: 'buy' },
+  { text: 'SENSEX breadth deteriorating — advancers at 38%, decliners at 62%', badge: 'sell', type: 'sell' },
+  { text: 'NIFTY options expiry: max pain at 24,800 — pin risk elevated', badge: 'alert', type: 'warn' },
+  { text: 'WIPRO gap-down opening — heavy institutional selling detected', badge: 'sell', type: 'sell' },
+  { text: 'BHEL breakout: 52-week high breached on 4× volume', badge: 'buy', type: 'buy' },
 ];
 
-function addNews(){
-  const feed=$('newsFeed');if(!feed)return;
-  const tmpl=NEWS[Math.floor(Math.random()*NEWS.length)];
-  const sym=S.newsFilter==='ALL'?S.watchlist[Math.floor(Math.random()*S.watchlist.length)]:S.newsFilter;
-  const text=tmpl.t.replace('{s}',sym).replace('{n}',fmt(Math.random()*10+1,1)).replace('{p}',fmt(S.prices[sym]*1.1,0));
-  const div=document.createElement('div');
-  div.className='news-item '+tmpl.sent;
-  div.innerHTML=`<div class="news-sym">${sym} — ${tmpl.sent==='bull'?'BULLISH':tmpl.sent==='bear'?'BEARISH':'NEUTRAL'}</div><div class="news-text">${text}</div><div class="news-time">${ts()}</div>`;
-  feed.prepend(div);
-  while(feed.children.length>25)feed.lastChild.remove();
+function pushSignal(override) {
+  const sig  = override || SIGNAL_POOL[Math.floor(Math.random() * SIGNAL_POOL.length)];
+  const list = $('signalList');
+  const item = document.createElement('div');
+  item.className = `sig-item ${sig.type} ${sig.isUser ? 'user' : ''}`;
+  item.innerHTML = `
+    <span class="sig-time">${now()}</span>
+    <span class="sig-text">${sig.text}</span>
+    <span class="sig-badge ${sig.badge}">${sig.badge.toUpperCase()}</span>
+  `;
+  list.insertBefore(item, list.firstChild);
+  if (list.children.length > 24) list.removeChild(list.lastChild);
 }
 
-// ── PRICE ALERTS ───────────────────────────
-function renderAlerts(){
-  const list=$('alertsList');if(!list)return;
-  if(!S.priceAlerts.length){list.innerHTML='<div class="no-alerts">No active alerts</div>';return;}
-  list.innerHTML=S.priceAlerts.map((a,i)=>`
-    <div class="alert-item ${a.triggered?'triggered':''}">
-      <span class="alert-sym-badge">${a.sym}</span>
-      <span style="color:var(--text2)">${a.dir==='above'?'↑ Above':'↓ Below'}</span>
-      <span style="color:var(--text)">${fmt(a.target)}</span>
-      ${a.triggered?'<span style="color:var(--amber);font-size:9px">TRIGGERED</span>':''}
-      <span class="alert-del" onclick="removeAlert(${i})">✕</span>
-    </div>`).join('');
+function initSignals() {
+  pushSignal();
+  const sched = () => setTimeout(() => { pushSignal(); sched(); }, 2800 + Math.random() * 3500);
+  sched();
 }
 
-function checkPriceAlerts(){
-  S.priceAlerts.forEach(a=>{
-    if(a.triggered)return;
-    const p=S.prices[a.sym];
-    if((a.dir==='above'&&p>=a.target)||(a.dir==='below'&&p<=a.target)){
-      a.triggered=true;
-      setAlert(`🔔 PRICE ALERT: ${a.sym} ${a.dir==='above'?'exceeded':'fell below'} ${fmt(a.target)}`,'warn');
-      if(S.soundEnabled){try{const ctx=new AudioContext();const o=ctx.createOscillator();o.connect(ctx.destination);o.frequency.value=880;o.start();setTimeout(()=>o.stop(),100);}catch(e){}}
-    }
+// ── Heatmap ───────────────────────────────────────────────────
+const SECTORS = [
+  { name: 'BANKING', pct: 1.84 }, { name: 'IT',      pct: -0.82 },
+  { name: 'AUTO',    pct: 1.72 }, { name: 'PHARMA',  pct:  0.44 },
+  { name: 'ENERGY',  pct: 0.68 }, { name: 'FMCG',    pct: -0.28 },
+  { name: 'METALS',  pct: 2.14 }, { name: 'REALTY',  pct: -1.44 },
+  { name: 'TELECOM', pct: 0.32 },
+];
+let sectorState = SECTORS.map(d => ({ ...d }));
+
+function hmCls(p) {
+  if (p >  1.5) return 'hm-sp'; if (p >  0.5) return 'hm-p';  if (p >  0.1) return 'hm-lp';
+  if (p > -0.1) return 'hm-n';  if (p > -0.5) return 'hm-ln'; if (p > -1.5) return 'hm-ng';
+  return 'hm-sn';
+}
+
+function renderHeatmap() {
+  const g = $('heatmap');
+  g.innerHTML = '';
+  sectorState.forEach(s => {
+    const c = document.createElement('div');
+    c.className = `hm-cell ${hmCls(s.pct)}`;
+    c.innerHTML = `<div class="hm-name">${s.name}</div><div class="hm-pct">${s.pct >= 0 ? '+' : ''}${s.pct.toFixed(2)}%</div>`;
+    g.appendChild(c);
   });
-  renderAlerts();
 }
 
-window.removeAlert=i=>{S.priceAlerts.splice(i,1);renderAlerts();};
-
-// ── ECONOMIC CALENDAR ──────────────────────
-function renderCalendar(){
-  const tbody=$('calendarBody');if(!tbody)return;
-  tbody.innerHTML=ECON_EVENTS.map(e=>{
-    const ic=e.impact==='high'?'impact-high':e.impact==='med'?'impact-med':'impact-low';
-    let ac='';let actTxt='—';
-    if(e.actual){
-      const fNum=parseFloat(e.forecast.replace(/[^0-9.-]/g,''));
-      const aNum=parseFloat(e.actual.replace(/[^0-9.-]/g,''));
-      if(!isNaN(fNum)&&!isNaN(aNum)){ac=aNum>fNum?'actual-beat':aNum<fNum?'actual-miss':'actual-meet';}
-      actTxt=e.actual;
-    }
-    return `<tr><td style="color:var(--text3)">${e.time}</td><td style="color:var(--text)">${e.event}</td><td class="${ic}">${e.impact.toUpperCase()}</td><td style="color:var(--text2)">${e.forecast}</td><td class="${ac}">${actTxt}</td></tr>`;
-  }).join('');
+function initHeatmap() {
+  renderHeatmap();
+  setInterval(() => {
+    sectorState.forEach(s => { s.pct = Math.max(-4, Math.min(4, s.pct + (Math.random() - 0.5) * 0.15)); });
+    renderHeatmap();
+  }, 4000);
 }
 
-// ── MARKET STATS ───────────────────────────
-function renderMarketStats(){
-  const grid=$('marketStatsGrid');if(!grid)return;
-  const advDecl=S.watchlist.filter(s=>S.changes[s]>0).length;
-  const vix=(12+Math.abs(randNorm(0,2))).toFixed(2);
-  $('vixDisplay').textContent='VIX '+vix;
-  const topMover=[...S.watchlist].sort((a,b)=>Math.abs(S.changes[b])-Math.abs(S.changes[a]))[0];
-  const totalVol=S.watchlist.reduce((a,s)=>a+S.volumes[s],0);
-  const avgChg=S.watchlist.reduce((a,s)=>a+S.changes[s],0)/S.watchlist.length;
-  grid.innerHTML=`
-    <div class="mstat"><div class="mstat-lbl">ADVANCING</div><div class="mstat-val" style="color:var(--green)">${advDecl}/${S.watchlist.length}</div></div>
-    <div class="mstat"><div class="mstat-lbl">DECLINING</div><div class="mstat-val" style="color:var(--red)">${S.watchlist.length-advDecl}/${S.watchlist.length}</div></div>
-    <div class="mstat"><div class="mstat-lbl">TOP MOVER</div><div class="mstat-val" style="color:var(--accent)">${topMover}</div><div class="mstat-sub">${fmt(S.changes[topMover],2)}%</div></div>
-    <div class="mstat"><div class="mstat-lbl">AVG CHANGE</div><div class="mstat-val" style="color:${avgChg>=0?'var(--green)':'var(--red)'}">${avgChg>=0?'+':''}${fmt(avgChg,2)}%</div></div>
-    <div class="mstat"><div class="mstat-lbl">TOTAL VOLUME</div><div class="mstat-val">${fmtK(totalVol)}</div></div>
-    <div class="mstat"><div class="mstat-lbl">VIX INDEX</div><div class="mstat-val" style="color:var(--amber)">${vix}</div><div class="mstat-sub">${vix>20?'HIGH FEAR':vix>15?'ELEVATED':'LOW FEAR'}</div></div>`;
-}
+// ── AI Signals ────────────────────────────────────────────────
+const AI_TICKERS = [
+  { sym: 'RELIANCE', bull: 72 }, { sym: 'HDFCBANK', bull: 45 },
+  { sym: 'TCS',      bull: 38 }, { sym: 'INFY',     bull: 52 },
+  { sym: 'ITC',      bull: 66 }, { sym: 'BAJFIN',   bull: 58 },
+];
 
-// ── SESSION P&L ────────────────────────────
-function updateSessionPnl(){
-  let pnl=0;
-  Object.entries(S.portfolio).forEach(([sym,pos])=>{
-    pnl+=(S.prices[sym]-pos.avgPrice)*pos.qty;
+function renderAI() {
+  const list = $('aiList');
+  list.innerHTML = '';
+  AI_TICKERS.forEach(t => {
+    const isBull = t.bull >= 50;
+    const row = document.createElement('div');
+    row.className = 'ai-row';
+    row.innerHTML = `
+      <div class="ai-sym">${t.sym}</div>
+      <div class="ai-bar"><div class="ai-fill ${isBull ? 'bull' : 'bear'}" style="width:${t.bull}%"></div></div>
+      <div class="ai-tag ${isBull ? 'bull' : 'bear'}">${isBull ? 'BULL' : 'BEAR'}</div>
+    `;
+    list.appendChild(row);
   });
-  const el=$('sessionPnl');
-  if(el){el.innerHTML=`P&amp;L: <b style="color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmtDollar(Math.abs(pnl))}</b>`;}
 }
 
-// ── ALERT BAR ──────────────────────────────
-function setAlert(msg,type='info'){
-  const bar=$('alertBar'),txt=$('alertText'),lbl=$('alertLabel');
-  if(!bar)return;
-  bar.className='alert-bar '+(type==='warn'?'warn':type==='danger'?'danger':'');
-  lbl.textContent=type==='warn'?'⚡ ALERT':type==='danger'?'🔴 CRITICAL':'ℹ INFO';
-  txt.textContent=msg;
+function initAI() {
+  renderAI();
+  setInterval(() => {
+    AI_TICKERS.forEach(t => { t.bull = Math.max(8, Math.min(92, t.bull + (Math.random() - 0.5) * 4)); });
+    renderAI();
+  }, 3600);
 }
 
-function checkAutoAlerts(){
-  for(const sym of S.watchlist){
-    if(Math.abs(S.changes[sym])>3){setAlert(`${sym} moved ${S.changes[sym]>0?'+':''}${fmt(S.changes[sym],2)}% from open — unusual activity`,'danger');return;}
-  }
-  for(const sym of S.watchlist){
-    const rsi=calcRSI(S.histories[sym]);
-    if(rsi<25){setAlert(`${sym} RSI at ${rsi} — extreme oversold`,'warn');return;}
-    if(rsi>78){setAlert(`${sym} RSI at ${rsi} — extreme overbought`,'warn');return;}
-  }
-  setAlert('All markets nominal. Monitoring for anomalies...','info');
+// ── Regulatory ────────────────────────────────────────────────
+const REG_ITEMS = [
+  { tag: 'CIRCULAR', date: '14 Mar', text: 'SEBI mandates T+0 settlement for top 100 stocks effective April 2025.' },
+  { tag: 'NOTICE',   date: '12 Mar', text: 'F&O position limit review — SEBI proposes reducing open interest cap for single-stock contracts.' },
+  { tag: 'ADVISORY', date: '10 Mar', text: 'Algo trading registration for proprietary desks: extended deadline to 30 June.' },
+  { tag: 'CIRCULAR', date: '08 Mar', text: 'New KYC norms for FPI category II entities effective immediately.' },
+  { tag: 'ORDER',    date: '05 Mar', text: 'Insider trading probe: SEBI bars promoter of mid-cap pharma from markets.' },
+  { tag: 'ADVISORY', date: '02 Mar', text: 'Retail investor margin requirements revised — intraday leverage capped at 5×.' },
+];
+
+function initReg() {
+  const list = $('regList');
+  REG_ITEMS.forEach(r => {
+    const item = document.createElement('div');
+    item.className = 'reg-item';
+    item.innerHTML = `
+      <div class="reg-meta"><span class="reg-tag">${r.tag}</span><span class="reg-date">${r.date}</span></div>
+      <div class="reg-text">${r.text}</div>
+    `;
+    list.appendChild(item);
+  });
 }
 
-$('alertDismiss').addEventListener('click',()=>setAlert('Alert dismissed. Monitoring resumed.','info'));
+// ── Events Countdown ─────────────────────────────────────────
+const EVENTS = [
+  { name: 'RBI Policy Decision',    date: new Date(Date.now() + 2 * 86400000 + 3600000 * 10) },
+  { name: 'NIFTY F&O Expiry',       date: new Date(Date.now() + 4 * 86400000) },
+  { name: 'US CPI Data Release',    date: new Date(Date.now() + 86400000 + 3600000 * 14) },
+  { name: 'TCS Earnings',           date: new Date(Date.now() + 6 * 86400000) },
+  { name: 'FOMC Minutes',           date: new Date(Date.now() + 8 * 86400000 + 3600000 * 19) },
+];
 
-// ── COMMAND TERMINAL ───────────────────────
-const CMDS={
-  help:()=>[
-    {c:'cmd-head',v:'═══ Available Commands ═══'},
-    {c:'cmd-info',v:'price <SYM>         — Current price & stats'},
-    {c:'cmd-info',v:'chart <SYM>         — Switch main chart'},
-    {c:'cmd-info',v:'ob <SYM>            — Switch order book'},
-    {c:'cmd-info',v:'add <SYM>           — Add to watchlist'},
-    {c:'cmd-info',v:'remove <SYM>        — Remove from watchlist'},
-    {c:'cmd-info',v:'buy <SYM> <qty>     — Add portfolio position'},
-    {c:'cmd-info',v:'portfolio           — Show portfolio'},
-    {c:'cmd-info',v:'rsi <SYM>           — RSI value'},
-    {c:'cmd-info',v:'alert <MSG>         — Post custom alert'},
-    {c:'cmd-info',v:'top                 — Top mover'},
-    {c:'cmd-info',v:'compare <A> <B>     — Compare two symbols'},
-    {c:'cmd-info',v:'clear               — Clear terminal'},
-  ],
-  price:args=>{
-    const sym=args[0]?.toUpperCase();if(!S.prices[sym])return[{c:'cmd-err',v:`Unknown: ${sym}`}];
-    const c=S.changes[sym],rsi=calcRSI(S.histories[sym]);
-    return[{c:'cmd-ok',v:`${sym}  $${fmt(S.prices[sym])}  ${c>=0?'+':''}${fmt(c,2)}%  Vol:${fmtK(S.volumes[sym])}  RSI:${rsi}`}];
+function fmtCountdown(ms) {
+  if (ms <= 0) return '00:00:00';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (d > 0) return `${d}d ${h}h`;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+function renderEvents() {
+  const list = $('eventList');
+  list.innerHTML = '';
+  const now = Date.now();
+  const maxMs = Math.max(...EVENTS.map(e => e.date - now));
+
+  EVENTS.forEach(ev => {
+    const ms = ev.date - now;
+    const pct = Math.max(0, Math.min(100, (1 - ms / (10 * 86400000)) * 100));
+    const item = document.createElement('div');
+    item.className = 'event-item';
+    item.innerHTML = `
+      <div class="event-top">
+        <div class="event-name">${ev.name}</div>
+        <div class="event-countdown">${fmtCountdown(ms)}</div>
+      </div>
+      <div class="event-detail">${ev.date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</div>
+      <div class="event-bar-track"><div class="event-bar-fill" style="width:${pct}%"></div></div>
+    `;
+    list.appendChild(item);
+  });
+}
+
+function initEvents() {
+  renderEvents();
+  setInterval(renderEvents, 30000);
+}
+
+// ── P&L Strip ─────────────────────────────────────────────────
+const PNL_POSITIONS = [
+  { sym: 'RELIANCE',  qty: 10,  entry: 2910.00 },
+  { sym: 'HDFCBANK',  qty: 20,  entry: 1760.00 },
+  { sym: 'TCS',       qty: -5,  entry: 3840.00 },   // short
+  { sym: 'INFY',      qty: 15,  entry: 1600.00 },
+];
+
+function renderPNL() {
+  const body = $('pnlBody');
+  body.innerHTML = '';
+  let totalPnl = 0;
+
+  PNL_POSITIONS.forEach(pos => {
+    // Find LTP from idxState (approximate with noise)
+    const ltp = (idxState[0]?.val || 24853) * (0.1 + Math.random() * 0.05) * (pos.entry / 2500);
+    const pnl = (ltp - pos.entry) * pos.qty;
+    totalPnl += pnl;
+    const isPos = pnl >= 0;
+
+    const row = document.createElement('div');
+    row.className = 'pnl-row';
+    row.innerHTML = `
+      <span class="pnl-sym">${pos.qty < 0 ? '▼ ' : '▲ '}${pos.sym} (${Math.abs(pos.qty)})</span>
+      <span class="pnl-val ${isPos ? 'pos' : 'neg'}">${isPos ? '+' : ''}₹${pnl.toFixed(0)}</span>
+    `;
+    body.appendChild(row);
+  });
+
+  const totDiv = document.createElement('div');
+  totDiv.className = 'pnl-total';
+  const isPos = totalPnl >= 0;
+  totDiv.innerHTML = `
+    <span class="pnl-total-label">SESSION P&L</span>
+    <span class="pnl-total-val ${isPos ? 'pos' : 'neg'}">${isPos ? '+' : ''}₹${Math.abs(totalPnl).toFixed(0)}</span>
+  `;
+  body.appendChild(totDiv);
+}
+
+function initPNL() {
+  renderPNL();
+  setInterval(renderPNL, 3000);
+}
+
+// ── Risk Gauge ────────────────────────────────────────────────
+function updateRisk() {
+  S.riskVal = Math.max(10, Math.min(95, S.riskVal + (Math.random() - 0.5) * 3));
+  $('riskFill').style.width = S.riskVal + '%';
+  $('riskVal').textContent  = Math.round(S.riskVal);
+  $('riskVal').className    = S.riskVal > 70 ? 'risk-val neg' : S.riskVal > 45 ? 'risk-val amb' : 'risk-val';
+}
+
+// ── Anomaly ───────────────────────────────────────────────────
+const ANOMALIES = [
+  { msg: 'Unusual volume spike in BANKNIFTY — 3.4σ deviation from 30-day mean.', sigma: '3.4σ' },
+  { msg: 'Circuit breaker proximity: NIFTYIT down 4.2% in 3 minutes — halt possible.', sigma: '4.1σ' },
+  { msg: 'Dark pool activity detected in RELIANCE — 18M shares at ₹2,935.', sigma: '2.9σ' },
+  { msg: 'Correlated sell-off: FII unwinding detected across 6 major positions.', sigma: '3.8σ' },
+  { msg: 'HFT anomaly: 24,000+ orders placed in 800ms on HDFC options chain.', sigma: '5.1σ' },
+  { msg: 'Liquidity gap event: bid stack collapsed in MIDCAP 150 — recovery in 1.2s.', sigma: '3.1σ' },
+];
+
+function triggerAnomaly() {
+  const a   = ANOMALIES[Math.floor(Math.random() * ANOMALIES.length)];
+  const msgEl = $('anomMsg');
+  $('anomSigma').textContent = a.sigma + ' DEVIATION';
+  $('anomTape').textContent  = `ALERT · ${S.focus} · ${now()} · UNCONFIRMED`;
+  msgEl.textContent = '';
+  msgEl.className   = 'anom-msg typing';
+  $('anomalyOverlay').classList.remove('hidden');
+  setWhisper('high');
+
+  let ci = 0;
+  const type = () => {
+    if (ci <= a.msg.length) { msgEl.textContent = a.msg.slice(0, ci); ci++; setTimeout(type, 16 + Math.random() * 10); }
+    else msgEl.className = 'anom-msg';
+  };
+  type();
+}
+
+function initAnomaly() {
+  $('anomalyBtn').addEventListener('click', triggerAnomaly);
+  $('anomClose').addEventListener('click', () => { $('anomalyOverlay').classList.add('hidden'); setWhisper('none'); });
+}
+
+// ── Help ──────────────────────────────────────────────────────
+function initHelp() {
+  $('helpBtn').addEventListener('click', () => $('helpOverlay').classList.remove('hidden'));
+  $('helpClose').addEventListener('click', () => $('helpOverlay').classList.add('hidden'));
+}
+
+// ── CLI ───────────────────────────────────────────────────────
+function cliOut(msg, type = 'info') {
+  const wrap = $('cliOutput');
+  if (wrap.classList.contains('hidden')) { wrap.classList.remove('hidden'); }
+  const line = document.createElement('div');
+  line.className = `cli-line ${type}`;
+  line.textContent = msg;
+  wrap.appendChild(line);
+  wrap.scrollTop = wrap.scrollHeight;
+  clearTimeout(S._cliTimer);
+  S._cliTimer = setTimeout(() => { wrap.classList.add('hidden'); }, 9000);
+}
+
+const CMDS = {
+  '/focus': args => {
+    const sym = args.join(' ').toUpperCase();
+    if (!sym) return cliOut('Usage: /focus [SYMBOL]', 'err');
+    S.focus = sym;
+    $('focusDisplay').textContent = sym;
+    $('chartTitle').textContent   = sym;
+    $('obTicker').textContent     = sym.slice(0, 10);
+    renderIndices();
+    cliOut(`Focus shifted → ${sym}`, 'ok');
+    pushSignal({ text: `[SYSTEM] Terminal focus changed to ${sym}`, badge: 'alert', type: 'warn' });
   },
-  chart:args=>{const sym=args[0]?.toUpperCase();if(!S.prices[sym])return[{c:'cmd-err',v:`Unknown: ${sym}`}];S.chartSym=sym;$('chartSymbol').value=sym;return[{c:'cmd-ok',v:`Chart → ${sym}`}];},
-  ob:args=>{const sym=args[0]?.toUpperCase();if(!S.prices[sym])return[{c:'cmd-err',v:`Unknown: ${sym}`}];S.obSym=sym;$('obSymbol').value=sym;return[{c:'cmd-ok',v:`Order book → ${sym}`}];},
-  add:args=>{
-    const sym=args[0]?.toUpperCase()?.trim();if(!sym)return[{c:'cmd-err',v:'Usage: add <SYM>'}];
-    if(S.watchlist.includes(sym))return[{c:'cmd-err',v:`${sym} already tracked`}];
-    addToWatchlist(sym);return[{c:'cmd-ok',v:`${sym} added to watchlist`}];
+  '/buy': args => {
+    const qty = parseInt(args[0]) || 1;
+    const price = (idxState[0]?.val || 24853).toFixed(2);
+    cliOut(`▲ BUY  ${qty} × ${S.focus} @ ₹${price} — stamped on tape`, 'buy');
+    pushSignal({ text: `[USER TAPE] BUY ${qty} × ${S.focus} @ ₹${price}`, badge: 'buy', type: 'buy', isUser: true });
+    S.riskVal = Math.min(95, S.riskVal + qty * 0.5);
+    updateRisk();
   },
-  remove:args=>{
-    const sym=args[0]?.toUpperCase();const i=S.watchlist.indexOf(sym);
-    if(i===-1)return[{c:'cmd-err',v:`${sym} not in watchlist`}];
-    S.watchlist.splice(i,1);return[{c:'cmd-ok',v:`${sym} removed`}];
+  '/sell': args => {
+    const qty = parseInt(args[0]) || 1;
+    const price = (idxState[0]?.val || 24853).toFixed(2);
+    cliOut(`▼ SELL ${qty} × ${S.focus} @ ₹${price} — stamped on tape`, 'sell');
+    pushSignal({ text: `[USER TAPE] SELL ${qty} × ${S.focus} @ ₹${price}`, badge: 'sell', type: 'sell', isUser: true });
+    S.riskVal = Math.max(10, S.riskVal - qty * 0.3);
+    updateRisk();
   },
-  buy:args=>{
-    const sym=args[0]?.toUpperCase(),qty=parseInt(args[1]);
-    if(!S.prices[sym])return[{c:'cmd-err',v:`Unknown: ${sym}`}];
-    if(!qty||qty<1)return[{c:'cmd-err',v:'Usage: buy <SYM> <qty>'}];
-    addPosition(sym,qty,S.prices[sym]);renderPortfolio();
-    return[{c:'cmd-ok',v:`Bought ${qty} × ${sym} @ $${fmt(S.prices[sym])} = ${fmtDollar(qty*S.prices[sym])}`}];
+  '/alert': args => {
+    const lvl = (args[0] || '').toLowerCase();
+    if (!['low', 'mid', 'high'].includes(lvl)) return cliOut('Usage: /alert [low|mid|high]', 'err');
+    S.alertLevel = lvl;
+    $('alertLevel').textContent = lvl.toUpperCase();
+    setWhisper(lvl);
+    cliOut(`Alert sensitivity → ${lvl.toUpperCase()}`, 'ok');
   },
-  portfolio:()=>{
-    const lines=[{c:'cmd-head',v:'Portfolio:'}];
-    if(!Object.keys(S.portfolio).length)return[{c:'cmd-line',v:'No positions.'}];
-    Object.entries(S.portfolio).forEach(([sym,pos])=>{
-      const now=S.prices[sym],pnl=(now-pos.avgPrice)*pos.qty;
-      lines.push({c:'cmd-line',v:`  ${sym.padEnd(6)} qty:${pos.qty}  avg:$${fmt(pos.avgPrice)}  now:$${fmt(now)}  P&L:${pnl>=0?'+':''}$${fmt(pnl)}`});
-    });
-    return lines;
+  '/anomaly': () => { triggerAnomaly(); cliOut('Anomaly triggered', 'ok'); },
+  '/clear':   () => { $('cliOutput').innerHTML = ''; },
+  '/risk':    args => {
+    const v = parseInt(args[0]);
+    if (isNaN(v) || v < 0 || v > 100) return cliOut('Usage: /risk [0-100]', 'err');
+    S.riskVal = v; updateRisk();
+    cliOut(`Risk gauge set to ${v}`, 'ok');
   },
-  rsi:args=>{
-    const sym=args[0]?.toUpperCase();if(!S.histories[sym])return[{c:'cmd-err',v:`No data: ${sym}`}];
-    const r=calcRSI(S.histories[sym]);
-    return[{c:'cmd-ok',v:`${sym} RSI(14): ${r}  [${r<35?'OVERSOLD':r>65?'OVERBOUGHT':'NEUTRAL'}]`}];
+  '/help': () => {
+    [
+      '/focus [SYM]        — shift terminal focus',
+      '/buy [qty]          — stamp buy on tape',
+      '/sell [qty]         — stamp sell on tape',
+      '/alert [low|mid|high] — set whisper sensitivity',
+      '/risk [0-100]       — manually set risk gauge',
+      '/anomaly            — trigger anomaly spike',
+      '/clear              — clear this output',
+    ].forEach(l => cliOut(l, 'info'));
   },
-  alert:args=>{
-    const msg=args.join(' ');if(!msg)return[{c:'cmd-err',v:'Usage: alert <msg>'}];
-    setAlert('📌 '+msg,'warn');return[{c:'cmd-ok',v:'Alert posted'}];
-  },
-  top:()=>{
-    const sym=[...S.watchlist].sort((a,b)=>Math.abs(S.changes[b])-Math.abs(S.changes[a]))[0];
-    return[{c:'cmd-ok',v:`Top mover: ${sym}  ${S.changes[sym]>=0?'+':''}${fmt(S.changes[sym],2)}%  $${fmt(S.prices[sym])}`}];
-  },
-  compare:args=>{
-    const a=args[0]?.toUpperCase(),b=args[1]?.toUpperCase();
-    if(!S.prices[a]||!S.prices[b])return[{c:'cmd-err',v:'Usage: compare <SYM> <SYM>'}];
-    return[
-      {c:'cmd-head',v:`Comparison: ${a} vs ${b}`},
-      {c:'cmd-line',v:`  Price:  ${a} $${fmt(S.prices[a])}  |  ${b} $${fmt(S.prices[b])}`},
-      {c:'cmd-line',v:`  Chg%:   ${a} ${fmt(S.changes[a],2)}%  |  ${b} ${fmt(S.changes[b],2)}%`},
-      {c:'cmd-line',v:`  RSI:    ${a} ${calcRSI(S.histories[a]||[])}  |  ${b} ${calcRSI(S.histories[b]||[])}`},
-      {c:'cmd-line',v:`  Vol:    ${a} ${fmtK(S.volumes[a])}  |  ${b} ${fmtK(S.volumes[b])}`},
-    ];
-  },
-  clear:()=>{$('cmdOutput').innerHTML='';return[];},
 };
 
-function runCmd(raw){
-  const out=$('cmdOutput');
-  const parts=raw.trim().split(/\s+/),cmd=parts[0].toLowerCase(),args=parts.slice(1);
-  appendCmd('> '+raw,'cmd-echo');
-  if(!cmd)return;
-  S.cmdHistory.unshift(raw);S.cmdHistIdx=-1;
-  const fn=CMDS[cmd];
-  if(!fn){appendCmd(`Not found: ${cmd}. Type 'help'`,'cmd-err');return;}
-  fn(args).forEach(l=>appendCmd(l.v,l.c));
-  out.scrollTop=out.scrollHeight;
-}
-function appendCmd(txt,cls='cmd-line'){const d=el('div',cls);d.textContent=txt;$('cmdOutput').appendChild(d);}
-
-// ── UI WIRING ──────────────────────────────
-$('chartSymbol').addEventListener('change',e=>{S.chartSym=e.target.value;drawChart();});
-$('chartType').addEventListener('change',e=>{S.chartType=e.target.value;drawChart();});
-$('chartInterval').addEventListener('change',e=>{S.chartInterval=parseInt(e.target.value);});
-$('chartResetBtn').addEventListener('click',()=>{S.histories[S.chartSym]=[S.prices[S.chartSym]];drawChart();});
-$('tradeFilter').addEventListener('change',e=>{S.tradeFilter=e.target.value;renderTrades();});
-$('flashToggle').addEventListener('change',e=>{S.flashEnabled=e.target.checked;});
-$('largeOnlyToggle').addEventListener('change',e=>{S.largeOnly=e.target.checked;renderTrades();});
-$('obSymbol').addEventListener('change',e=>{S.obSym=e.target.value;renderOrderBook();});
-$('depthSymbol').addEventListener('change',e=>{S.depthSym=e.target.value;renderDepth();});
-$('analyticsSym').addEventListener('change',e=>{S.analyticsSym=e.target.value;renderAnalytics();});
-$('newsFilter').addEventListener('change',e=>{S.newsFilter=e.target.value;});
-
-// Add symbol
-$('addSymBtn').addEventListener('click',()=>{$('addSymRow').classList.remove('hidden');$('newSymInput').focus();});
-$('cancelSym').addEventListener('click',()=>{$('addSymRow').classList.add('hidden');$('newSymInput').value='';});
-$('confirmSym').addEventListener('click',()=>{
-  const sym=$('newSymInput').value.toUpperCase().trim();
-  if(sym&&!S.watchlist.includes(sym)){addToWatchlist(sym);}
-  $('addSymRow').classList.add('hidden');$('newSymInput').value='';
-});
-$('newSymInput').addEventListener('keydown',e=>{if(e.key==='Enter')$('confirmSym').click();if(e.key==='Escape')$('cancelSym').click();});
-
-function addToWatchlist(sym){
-  const base=BASE[sym]?.price||(Math.random()*800+50);
-  S.prices[sym]=base;S.prevPrices[sym]=base;S.opens[sym]=base;
-  S.volumes[sym]=Math.floor(Math.random()*5e6)+5e5;
-  S.histories[sym]=[base];S.changes[sym]=0;
-  if(!S.watchlist.includes(sym))S.watchlist.push(sym);
-  ['chartSymbol','tradeFilter','obSymbol','depthSymbol','analyticsSym','newsFilter','posSym','alertSym'].forEach(id=>{
-    const el=document.getElementById(id);
-    if(el&&!Array.from(el.options).find(o=>o.value===sym)){const o=document.createElement('option');o.value=o.text=sym;el.add(o);}
+function initCLI() {
+  const input = $('cliInput');
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const raw = input.value.trim();
+      if (!raw) return;
+      S.cliHistory.unshift(raw);
+      S.cliIdx = -1;
+      input.value = '';
+      cliOut('› ' + raw, 'cmd');
+      const parts = raw.split(' ');
+      const fn = CMDS[parts[0].toLowerCase()];
+      fn ? fn(parts.slice(1)) : cliOut(`Unknown command: ${parts[0]}. Try /help`, 'err');
+    }
+    if (e.key === 'ArrowUp')   { S.cliIdx = Math.min(S.cliIdx + 1, S.cliHistory.length - 1); input.value = S.cliHistory[S.cliIdx] || ''; }
+    if (e.key === 'ArrowDown') { S.cliIdx = Math.max(S.cliIdx - 1, -1); input.value = S.cliIdx >= 0 ? S.cliHistory[S.cliIdx] : ''; }
+    if (e.key === 'Escape')    { input.value = ''; input.blur(); }
   });
 }
 
-// Portfolio
-$('addPositionBtn').addEventListener('click',()=>{$('addPosRow').classList.remove('hidden');});
-$('cancelPos').addEventListener('click',()=>{$('addPosRow').classList.add('hidden');});
-$('confirmPos').addEventListener('click',()=>{
-  const sym=$('posSym').value,qty=parseInt($('posQty').value)||0;
-  if(sym&&qty>0){addPosition(sym,qty,S.prices[sym]);renderPortfolio();}
-  $('addPosRow').classList.add('hidden');$('posQty').value='';
-});
-
-// Price alerts
-$('addAlertBtn').addEventListener('click',()=>{$('addAlertRow').classList.remove('hidden');});
-$('cancelAlert').addEventListener('click',()=>{$('addAlertRow').classList.add('hidden');});
-$('confirmAlert').addEventListener('click',()=>{
-  const sym=$('alertSym').value,dir=$('alertDir').value,target=parseFloat($('alertPrice').value);
-  if(sym&&dir&&!isNaN(target)){S.priceAlerts.push({sym,dir,target,triggered:false});renderAlerts();}
-  $('addAlertRow').classList.add('hidden');$('alertPrice').value='';
-});
-
-// Command
-$('cmdRunBtn').addEventListener('click',()=>{const v=$('cmdInput').value.trim();if(v){runCmd(v);$('cmdInput').value='';}});
-$('cmdClearBtn').addEventListener('click',()=>{$('cmdOutput').innerHTML='';});
-$('cmdInput').addEventListener('keydown',e=>{
-  if(e.key==='Enter'){const v=$('cmdInput').value.trim();if(v){runCmd(v);$('cmdInput').value='';}}
-  else if(e.key==='ArrowUp'){if(S.cmdHistIdx<S.cmdHistory.length-1){S.cmdHistIdx++;$('cmdInput').value=S.cmdHistory[S.cmdHistIdx]||'';}e.preventDefault();}
-  else if(e.key==='ArrowDown'){if(S.cmdHistIdx>0){S.cmdHistIdx--;$('cmdInput').value=S.cmdHistory[S.cmdHistIdx];}else{S.cmdHistIdx=-1;$('cmdInput').value='';}e.preventDefault();}
-});
-
-// ── DRAG PANELS ────────────────────────────
-(function(){
-  let drag=null,ox=0,oy=0,startLeft=0,startTop=0,z=10;
-  document.querySelectorAll('.panel-header.draggable').forEach(h=>{
-    h.addEventListener('mousedown',e=>{
-      if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT'||e.target.tagName==='BUTTON')return;
-      const panel=h.closest('.panel');if(!panel)return;
-      drag=panel;
-      const r=panel.getBoundingClientRect();
-      // Convert to absolute positioning
-      if(!panel.style.position||panel.style.position!=='absolute'){
-        panel.style.position='absolute';
-        panel.style.left=r.left+'px';
-        panel.style.top=(r.top+window.scrollY)+'px';
-        panel.style.width=r.width+'px';
-        panel.style.zIndex=++z;
-      }
-      ox=e.clientX-r.left;oy=e.clientY-r.top;
-      panel.classList.add('dragging');e.preventDefault();
-    });
-  });
-  document.addEventListener('mousemove',e=>{
-    if(!drag)return;
-    drag.style.left=Math.max(0,e.clientX-ox)+'px';
-    drag.style.top=Math.max(72,e.clientY-oy+window.scrollY)+'px';
-  });
-  document.addEventListener('mouseup',()=>{if(drag){drag.classList.remove('dragging');drag=null;}});
-})();
-
-// ── BOOT MESSAGES ──────────────────────────
-appendCmd('MARKET PULSE TERMINAL v2.0','cmd-head');
-appendCmd('Feeds connected. Type help for commands.','cmd-info');
-appendCmd('Try: buy NVDA 10   compare AAPL MSFT','cmd-line');
-
-// ── MAIN LOOP ──────────────────────────────
-let fc=0;
-function loop(){
-  tickPrices();
-  if(fc%2===0)updateTicker();
-  if(fc%S.chartInterval===0)drawChart();
-  if(fc%3===0)renderWatchlist();
-  addTrades();
-  if(fc%2===0)renderTrades();
-  if(fc%4===0){renderOrderBook();renderDepth();}
-  if(fc%5===0)renderAnalytics();
-  if(fc%6===0){renderHeatmap();renderMiniCharts();}
-  if(fc%8===0)renderCorrelation();
-  if(fc%6===0)renderPortfolio();
-  if(fc%10===0){renderMarketStats();updateSessionPnl();}
-  if(fc%12===0)checkAutoAlerts();
-  if(fc%35===0||(fc>10&&Math.random()<0.035))addNews();
-  fc++;
+// ── Sound ─────────────────────────────────────────────────────
+function initSound() {
+  let on = false;
+  $('soundBtn').addEventListener('click', () => { on = !on; $('soundBtn').textContent = on ? '♫' : '♪'; });
 }
 
-// Initial renders
-renderCalendar();
-renderAlerts();
-setInterval(loop,250);
-loop();
+// ── Keyboard shortcuts ────────────────────────────────────────
+function initKeys() {
+  document.addEventListener('keydown', e => {
+    const inCLI = document.activeElement === $('cliInput');
+    if (e.key === 'Escape') {
+      $('anomalyOverlay').classList.add('hidden');
+      $('helpOverlay').classList.add('hidden');
+      $('cliOutput').classList.add('hidden');
+      $('cliInput').blur();
+      setWhisper('none');
+    }
+    if (inCLI) return;
+    if (e.key === '?') $('helpOverlay').classList.remove('hidden');
+    if (e.key === '/') { e.preventDefault(); $('cliInput').focus(); }
+    if (e.key.toLowerCase() === 'a') triggerAnomaly();
+  });
+}
+
+// ── Init ──────────────────────────────────────────────────────
+function initApp() {
+  startClock();
+  initTicker();
+  initMacro();
+  initIndices();
+  initChart();
+  initOB();
+  initTape();
+  initSignals();
+  initHeatmap();
+  initAI();
+  initReg();
+  initEvents();
+  initPNL();
+  setInterval(updateRisk, 4000);
+  initCLI();
+  initAnomaly();
+  initHelp();
+  initSound();
+  initKeys();
+
+  // Welcome
+  setTimeout(() => {
+    cliOut('NEXUS WAR ROOM · ALL INSTRUMENTS LIVE', 'ok');
+    cliOut('Press / to open CLI · ? for shortcuts', 'info');
+  }, 600);
+}
+
+runBoot();
