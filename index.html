@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NEXUS — Market Operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- ░░ BOOT ░░ -->
+<div id="boot">
+  <div class="boot-grid"></div>
+  <div class="boot-inner">
+    <div class="boot-wordmark">NEXUS</div>
+    <div class="boot-tagline">MARKET OPERATIONS CENTER</div>
+    <div class="boot-log" id="bootLog"></div>
+    <div class="boot-progress-wrap">
+      <div class="boot-progress-bar"><div id="bootBar"></div></div>
+      <span id="bootPct">0%</span>
+    </div>
+  </div>
+</div>
+
+<!-- ░░ APP ░░ -->
+<div id="app" class="hidden">
+
+  <!-- Edge glow for whisper system -->
+  <div id="edgeGlow" class="edge-glow"></div>
+
+  <!-- ── TOPBAR ── -->
+  <header class="topbar">
+    <div class="tb-brand">
+      <span class="tb-logo">NEXUS</span>
+      <span class="tb-sep">·</span>
+      <span class="tb-sub">OPS CENTER</span>
+    </div>
+
+    <div class="tb-ticker" id="tbTicker">
+      <div class="tb-ticker-inner" id="tbTickerInner"></div>
+    </div>
+
+    <div class="tb-status">
+      <div class="status-block" id="mktStatusBlock">
+        <div class="status-indicator" id="mktDot"></div>
+        <div>
+          <div class="status-label" id="mktText">MARKET CLOSED</div>
+          <div class="status-sub">NSE · BSE · MCX</div>
+        </div>
+      </div>
+      <div class="tb-divider"></div>
+      <div class="clock-block">
+        <div class="clock" id="clock">--:--:--</div>
+        <div class="clock-tz">IST</div>
+      </div>
+      <div class="tb-divider"></div>
+      <div class="sys-row">
+        <div class="sys-chip"><span class="sys-k">LAT</span><span class="sys-v" id="latency">--</span><span class="sys-u">ms</span></div>
+        <div class="sys-chip sys-chip--ok"><span class="sys-k">SYS</span><span class="sys-v">NOM</span></div>
+      </div>
+      <button class="tb-btn" id="helpBtn" title="Help / Shortcuts">?</button>
+      <button class="tb-btn" id="soundBtn">♪</button>
+    </div>
+  </header>
+
+  <!-- ── COMMAND BAR ── -->
+  <div class="cmdbar">
+    <div class="cmdbar-left">
+      <span class="cmdbar-focus-label">FOCUS</span>
+      <span class="cmdbar-focus-val" id="focusDisplay">NIFTY 50</span>
+      <span class="cmdbar-sep">|</span>
+      <span class="cmdbar-mode-label">ALERT</span>
+      <span class="cmdbar-mode-val" id="alertLevel">MID</span>
+    </div>
+    <div class="cmdbar-center">
+      <span class="cli-sym">›_</span>
+      <input id="cliInput" class="cli-input" type="text"
+        placeholder="  /focus RELIANCE  ·  /buy 100  ·  /sell 50  ·  /alert high  ·  /help"
+        autocomplete="off" spellcheck="false"/>
+    </div>
+    <div class="cmdbar-right">
+      <button class="cmd-pill" id="anomalyBtn">⚡ ANOMALY</button>
+      <div class="risk-gauge-wrap" title="Portfolio Risk">
+        <span class="risk-label">RISK</span>
+        <div class="risk-track"><div class="risk-fill" id="riskFill" style="width:42%"></div></div>
+        <span class="risk-val" id="riskVal">42</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MAIN GRID ── -->
+  <main class="grid" id="mainGrid">
+
+    <!-- COL-A: Chart (dominant) -->
+    <div class="panel p-chart" id="pChart">
+      <div class="panel-hdr">
+        <div class="phdr-left">
+          <span class="panel-name" id="chartTitle">NIFTY 50</span>
+          <span class="ptag">1D · LIVE</span>
+          <span class="pulse-dot"></span>
+        </div>
+        <div class="phdr-right">
+          <div class="big-price" id="niftyPrice">24,853.15</div>
+          <div class="big-chg pos" id="niftyChg">▲ +1.24%</div>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="mainChart"></canvas>
+      </div>
+      <div class="chart-footer">
+        <div class="ohlc-row">
+          <span class="ohlc-item"><span class="ohlc-lbl">O</span><span id="ohlcO">24,610</span></span>
+          <span class="ohlc-item"><span class="ohlc-lbl">H</span><span class="pos" id="ohlcH">24,920</span></span>
+          <span class="ohlc-item"><span class="ohlc-lbl">L</span><span class="neg" id="ohlcL">24,580</span></span>
+          <span class="ohlc-item"><span class="ohlc-lbl">C</span><span id="ohlcC">24,853</span></span>
+          <span class="ohlc-item"><span class="ohlc-lbl">VOL</span><span>142.3M</span></span>
+        </div>
+        <div class="timeframe-btns">
+          <button class="tf-btn active" data-tf="1D">1D</button>
+          <button class="tf-btn" data-tf="5D">5D</button>
+          <button class="tf-btn" data-tf="1M">1M</button>
+          <button class="tf-btn" data-tf="3M">3M</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- COL-A: Macro Strip -->
+    <div class="panel p-macro" id="pMacro">
+      <div class="panel-hdr">
+        <span class="panel-name">MACRO</span>
+        <span class="ptag">GLOBAL · LIVE</span>
+      </div>
+      <div class="macro-grid" id="macroGrid"></div>
+    </div>
+
+    <!-- COL-B: Indices -->
+    <div class="panel p-indices" id="pIndices">
+      <div class="panel-hdr">
+        <span class="panel-name">INDICES</span>
+        <span class="ptag">NSE/BSE</span>
+      </div>
+      <div class="idx-list" id="idxList"></div>
+    </div>
+
+    <!-- COL-B: VIX -->
+    <div class="panel p-vix" id="pVix">
+      <div class="panel-hdr">
+        <span class="panel-name">INDIA VIX</span>
+        <span class="ptag">VOLATILITY</span>
+      </div>
+      <div class="vix-body">
+        <div class="vix-dial-wrap">
+          <svg class="vix-dial" viewBox="0 0 160 90">
+            <path class="vix-arc-bg" d="M 10 85 A 70 70 0 0 1 150 85" fill="none" stroke-width="10" stroke-linecap="round"/>
+            <path class="vix-arc-fill" id="vixArc" d="M 10 85 A 70 70 0 0 1 150 85" fill="none" stroke-width="10" stroke-linecap="round"
+              stroke-dasharray="220" stroke-dashoffset="220"/>
+            <text x="80" y="78" class="vix-num-svg" id="vixSvgNum" text-anchor="middle">14.2</text>
+            <text x="15" y="92" class="vix-scale-txt" text-anchor="middle">8</text>
+            <text x="145" y="92" class="vix-scale-txt" text-anchor="middle">38</text>
+          </svg>
+        </div>
+        <div class="vix-meta">
+          <div class="vix-badge" id="vixBadge">CALM</div>
+          <canvas class="vix-spark" id="vixSpark"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- COL-C: Order Book -->
+    <div class="panel p-ob" id="pOB">
+      <div class="panel-hdr">
+        <span class="panel-name">ORDER BOOK</span>
+        <span class="ptag" id="obTicker">NIFTY</span>
+        <span class="pulse-dot"></span>
+      </div>
+      <div class="ob-wrap">
+        <div class="ob-hdr"><span>PRICE</span><span>QTY</span><span>DEPTH</span></div>
+        <div class="ob-asks" id="obAsks"></div>
+        <div class="ob-spread" id="obSpread">── SPREAD 0.05 ──</div>
+        <div class="ob-bids" id="obBids"></div>
+      </div>
+    </div>
+
+    <!-- COL-C: Trade Tape -->
+    <div class="panel p-tape" id="pTape">
+      <div class="panel-hdr">
+        <span class="panel-name">TRADE TAPE</span>
+        <span class="ptag">TIME & SALES</span>
+        <span class="pulse-dot"></span>
+      </div>
+      <div class="tape-wrap" id="tapeWrap"></div>
+    </div>
+
+    <!-- COL-D: Signals -->
+    <div class="panel p-signals" id="pSignals">
+      <div class="panel-hdr">
+        <span class="panel-name">SIGNAL STREAM</span>
+        <span class="ptag live-tag">● LIVE</span>
+      </div>
+      <div class="signal-list" id="signalList"></div>
+    </div>
+
+    <!-- COL-D: Heatmap -->
+    <div class="panel p-heat" id="pHeat">
+      <div class="panel-hdr">
+        <span class="panel-name">SECTOR HEATMAP</span>
+        <span class="ptag">NSE</span>
+      </div>
+      <div class="heatmap" id="heatmap"></div>
+    </div>
+
+    <!-- COL-D: AI Signals -->
+    <div class="panel p-ai" id="pAI">
+      <div class="panel-hdr">
+        <span class="panel-name">AI SENTIMENT</span>
+        <span class="ptag">MODEL v3</span>
+      </div>
+      <div class="ai-list" id="aiList"></div>
+    </div>
+
+    <!-- COL-E: Regulatory -->
+    <div class="panel p-reg" id="pReg">
+      <div class="panel-hdr">
+        <span class="panel-name">SEBI GRAVITY</span>
+        <span class="ptag">REGULATORY</span>
+      </div>
+      <div class="reg-list" id="regList"></div>
+    </div>
+
+    <!-- COL-E: Events Countdown -->
+    <div class="panel p-events" id="pEvents">
+      <div class="panel-hdr">
+        <span class="panel-name">UPCOMING EVENTS</span>
+        <span class="ptag">CALENDAR</span>
+      </div>
+      <div class="event-list" id="eventList"></div>
+    </div>
+
+    <!-- COL-E: P&L Strip -->
+    <div class="panel p-pnl" id="pPnl">
+      <div class="panel-hdr">
+        <span class="panel-name">SESSION P&amp;L</span>
+        <span class="ptag">PAPER</span>
+      </div>
+      <div class="pnl-body" id="pnlBody"></div>
+    </div>
+
+  </main>
+
+  <!-- CLI Output overlay -->
+  <div class="cli-output hidden" id="cliOutput"></div>
+
+  <!-- ── ANOMALY OVERLAY ── -->
+  <div class="anomaly-overlay hidden" id="anomalyOverlay">
+    <div class="anomaly-bg"></div>
+    <div class="anomaly-box">
+      <div class="anom-top">
+        <div class="anom-icon">⚡</div>
+        <div>
+          <div class="anom-title">ANOMALY DETECTED</div>
+          <div class="anom-sigma" id="anomSigma">3.4σ DEVIATION</div>
+        </div>
+      </div>
+      <div class="anom-msg" id="anomMsg"></div>
+      <div class="anom-tape" id="anomTape"></div>
+      <button class="anom-ack" id="anomClose">ACKNOWLEDGE ↩</button>
+    </div>
+  </div>
+
+  <!-- ── HELP OVERLAY ── -->
+  <div class="help-overlay hidden" id="helpOverlay">
+    <div class="help-box">
+      <div class="help-title">KEYBOARD SHORTCUTS <button class="help-x" id="helpClose">✕</button></div>
+      <div class="help-cols">
+        <div class="help-col">
+          <div class="help-section">NAVIGATION</div>
+          <div class="help-row"><kbd>?</kbd><span>This help</span></div>
+          <div class="help-row"><kbd>Esc</kbd><span>Close / clear</span></div>
+          <div class="help-row"><kbd>/</kbd><span>Focus CLI</span></div>
+          <div class="help-row"><kbd>A</kbd><span>Trigger anomaly</span></div>
+        </div>
+        <div class="help-col">
+          <div class="help-section">CLI COMMANDS</div>
+          <div class="help-row"><code>/focus [SYM]</code><span>Shift focus</span></div>
+          <div class="help-row"><code>/buy [qty]</code><span>Stamp buy</span></div>
+          <div class="help-row"><code>/sell [qty]</code><span>Stamp sell</span></div>
+          <div class="help-row"><code>/alert [low|mid|high]</code><span>Set whisper</span></div>
+          <div class="help-row"><code>/clear</code><span>Clear output</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<script src="app.js"></script>
+</body>
+</html>
